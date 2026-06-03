@@ -157,15 +157,22 @@ public class AuthController {
     }
 
     @GetMapping("/me")
-    public ResponseEntity<?> me(@org.springframework.security.core.annotation.AuthenticationPrincipal
-                                org.springframework.security.core.userdetails.UserDetails user) {
-        if (user == null) return ResponseEntity.status(401).build();
-        return usuarioRepo.findByEmail(user.getUsername())
-                .map(u -> ResponseEntity.ok(Map.of(
-                        "email", u.getEmail(),
-                        "rol", u.getRol(),
-                        "userId", u.getIdentificador()
-                )))
-                .orElse(ResponseEntity.status(404).build());
+    public ResponseEntity<?> me(org.springframework.security.core.Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        return usuarioRepo.findByEmail(auth.getName()).map(u -> {
+            java.util.Map<String, Object> resp = new java.util.HashMap<>();
+            resp.put("email",  u.getEmail());
+            resp.put("rol",    u.getRol());
+            resp.put("userId", u.getIdentificador());
+            resp.put("nombre", u.getPersona() != null ? u.getPersona().getNombre() : "");
+
+            if ("cliente".equals(u.getRol())) {
+                clienteRepo.findById(u.getIdentificador())
+                    .ifPresent(c -> resp.put("categoria", c.getCategoria()));
+            }
+            if (!resp.containsKey("categoria")) resp.put("categoria", null);
+
+            return ResponseEntity.ok(resp);
+        }).orElse(ResponseEntity.status(404).build());
     }
 }
