@@ -22,9 +22,13 @@ public class SubastaController {
     private final ItemCatalogoRepository itemCatalogoRepo;
 
     @GetMapping
-    public ResponseEntity<?> listar() {
+    public ResponseEntity<?> listar(@RequestParam(required = false) String categoria) {
         var hoy = java.time.LocalDate.now();
-        var subastas = subastaRepo.findByEstadoIn(List.of("abierta", "cerrada"));
+        var estados = List.of("abierta", "cerrada");
+        var categoriaNormalizada = categoria != null ? categoria.trim() : null;
+        var subastas = (categoriaNormalizada == null || categoriaNormalizada.isBlank() || "todas".equalsIgnoreCase(categoriaNormalizada))
+                ? subastaRepo.findByEstadoIn(estados)
+                : subastaRepo.findByEstadoInAndCategoriaIgnoreCase(estados, categoriaNormalizada);
 
         var result = subastas.stream().map(s -> {
             Map<String, Object> map = new HashMap<>();
