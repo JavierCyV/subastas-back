@@ -122,14 +122,25 @@ CREATE TABLE subastas (
 );
 
 CREATE TABLE productos (
-    identificador       SERIAL       NOT NULL,
+    identificador       SERIAL        NOT NULL,
     fecha               DATE,
-    disponible          VARCHAR(2)   CONSTRAINT chkd CHECK (disponible IN ('si','no')),
-    descripcioncatalogo VARCHAR(500) DEFAULT 'No Posee',
-    descripcioncompleta VARCHAR(300) NOT NULL,
-    revisor             INT          NOT NULL,
-    duenio              INT          NOT NULL,
+    disponible          VARCHAR(2)    CONSTRAINT chkd CHECK (disponible IN ('si','no')),
+    descripcioncatalogo VARCHAR(500)  DEFAULT 'No Posee',
+    descripcioncompleta VARCHAR(300),
+    revisor             INT,
+    duenio              INT,
     seguro              VARCHAR(30),
+    -- Solicitud de subasta (flujo de envío por parte del usuario)
+    titulo              VARCHAR(200),
+    clientesolicitante  INT,
+    estado              VARCHAR(25)   DEFAULT 'pendiente',
+    preciobasesugerido  DECIMAL(18,2),
+    preciobaseoficial   DECIMAL(18,2),
+    comisionoficial     DECIMAL(18,2),
+    motivorechazo       VARCHAR(1000),
+    archivocomprobante  VARCHAR(500),
+    declaracionjurada   VARCHAR(2)    DEFAULT 'no' CONSTRAINT chkdj CHECK (declaracionjurada IN ('si','no')),
+    fechasolicitud      TIMESTAMP     DEFAULT NOW(),
     CONSTRAINT pk_productos PRIMARY KEY (identificador)
 );
 
@@ -224,8 +235,9 @@ ALTER TABLE subastadores    ADD CONSTRAINT fk_subastadores_personas     FOREIGN 
 
 ALTER TABLE subastas        ADD CONSTRAINT fk_subastas_subastadores     FOREIGN KEY (subastador)        REFERENCES subastadores (identificador);
 
-ALTER TABLE productos       ADD CONSTRAINT fk_productos_empleados       FOREIGN KEY (revisor)           REFERENCES empleados (identificador);
-ALTER TABLE productos       ADD CONSTRAINT fk_productos_duenios         FOREIGN KEY (duenio)            REFERENCES duenios   (identificador);
+ALTER TABLE productos       ADD CONSTRAINT fk_productos_empleados       FOREIGN KEY (revisor)              REFERENCES empleados (identificador);
+ALTER TABLE productos       ADD CONSTRAINT fk_productos_duenios         FOREIGN KEY (duenio)               REFERENCES duenios   (identificador);
+ALTER TABLE productos       ADD CONSTRAINT fk_productos_clientes_sol    FOREIGN KEY (clientesolicitante)   REFERENCES clientes  (identificador);
 
 ALTER TABLE fotos           ADD CONSTRAINT fk_fotos_productos           FOREIGN KEY (producto)          REFERENCES productos (identificador);
 

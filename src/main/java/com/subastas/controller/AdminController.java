@@ -13,8 +13,10 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +30,7 @@ public class AdminController {
     private final ClienteRepository clienteRepo;
     private final DuenioRepository duenioRepo;
     private final SubastaRepository subastaRepo;
+    private final SolicitudItemRepository solicitudRepo;
     private final JavaMailSender mailSender;
 
     // ── USUARIOS PENDIENTES ────────────────────────────────────────────────────
@@ -166,6 +169,69 @@ public class AdminController {
                 "subastaActivas", subastaActivas,
                 "totalUsuarios", totalUsuarios
         ));
+    }
+
+    // ── SOLICITUDES DE ITEMS ───────────────────────────────────────────────────
+
+    @GetMapping("/solicitudes")
+    public ResponseEntity<?> listarSolicitudes() {
+        var lista = solicitudRepo.findAll().stream()
+                .map(this::solicitudToMap)
+                .toList();
+        return ResponseEntity.ok(lista);
+    }
+
+    @PutMapping("/solicitudes/{id}/inspeccionar")
+    public ResponseEntity<?> marcarInspeccion(@PathVariable Integer id) {
+        return solicitudRepo.findById(id).map(s -> {
+            s.setEstado("inspeccion");
+            solicitudRepo.save(s);
+            return ResponseEntity.ok(Map.of("mensaje", "Solicitud marcada en inspección"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    record TasarRequest(BigDecimal precioBaseOficial, BigDecimal comision) {}
+
+    @PutMapping("/solicitudes/{id}/tasar")
+    public ResponseEntity<?> tasar(@PathVariable Integer id, @RequestBody TasarRequest req) {
+        return solicitudRepo.findById(id).map(s -> {
+            if (req.precioBaseOficial() == null || req.comision() == null)
+                return ResponseEntity.badRequest().body(Map.of("error", "Precio base y comisión son obligatorios"));
+            s.setEstado("tasado");
+            s.setPrecioBaseOficial(req.precioBaseOficial());
+            s.setComision(req.comision());
+            solicitudRepo.save(s);
+            return ResponseEntity.ok(solicitudToMap(s));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    record RechazarSolicitudRequest(String motivo) {}
+
+    @PutMapping("/solicitudes/{id}/rechazar")
+    public ResponseEntity<?> rechazarSolicitud(@PathVariable Integer id,
+                                                @RequestBody(required = false) RechazarSolicitudRequest req) {
+        return solicitudRepo.findById(id).map(s -> {
+            s.setEstado("rechazado_empresa");
+            s.setMotivoRechazo(req != null ? req.motivo() : "Rechazado por la empresa");
+            solicitudRepo.save(s);
+            return ResponseEntity.ok(Map.of("mensaje", "Solicitud rechazada"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    private Map<String, Object> solicitudToMap(com.subastas.entity.SolicitudItem s) {
+        var map = new HashMap<String, Object>();
+        map.put("id", s.getIdentificador());
+        map.put("cliente", s.getCliente());
+        map.put("titulo", s.getTitulo());
+        map.put("categoria", s.getCategoria() != null ? s.getCategoria() : "");
+        map.put("descripcion", s.getDescripcion() != null ? s.getDescripcion() : "");
+        map.put("estado", s.getEstado());
+        map.put("precioBaseSugerido", s.getPrecioBaseSugerido());
+        map.put("precioBaseOficial", s.getPrecioBaseOficial());
+        map.put("comision", s.getComision());
+        map.put("motivoRechazo", s.getMotivoRechazo() != null ? s.getMotivoRechazo() : "");
+        map.put("fechaSolicitud", s.getFechaSolicitud() != null ? s.getFechaSolicitud().toString() : "");
+        return map;
     }
 
     private Map<String, Object> toMap(Subasta s) {
