@@ -9,6 +9,7 @@ import com.subastas.repository.ItemCatalogoRepository;
 import com.subastas.repository.MetodoPagoRepository;
 import com.subastas.repository.PujoRepository;
 import com.subastas.repository.RegistroDeSubastaRepository;
+import com.subastas.repository.SolicitudItemRepository;
 import com.subastas.repository.SubastaRepository;
 import com.subastas.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,10 @@ public class SubastaController {
     private final UsuarioRepository usuarioRepo;
     private final ClienteRepository clienteRepo;
     private final MetodoPagoRepository metodoPagoRepo;
+    private final SolicitudItemRepository solicitudRepo;
+
+    // Mapa para almacenar los temporizadores de las subastas activas (itemId -> deadline)
+    private final Map<Integer, java.time.LocalDateTime> activeItemDeadlines = new java.util.concurrent.ConcurrentHashMap<>();
 
     // Orden de categorías para control de acceso
     private static final List<String> ORDEN_CATEGORIAS = List.of("comun", "especial", "plata", "oro", "platino");
@@ -69,8 +74,19 @@ public class SubastaController {
             String tipo;
             if ("cerrada".equals(s.getEstado())) {
                 tipo = "cerrada";
-            } else if (s.getFecha() != null && !s.getFecha().isAfter(hoy)) {
-                tipo = "en_vivo";
+            } else if (s.getFecha() != null) {
+                if (s.getFecha().isBefore(hoy)) {
+                    tipo = "en_vivo";
+                } else if (s.getFecha().isEqual(hoy)) {
+                    var ahoraHora = java.time.LocalTime.now();
+                    if (s.getHora() != null && ahoraHora.isBefore(s.getHora())) {
+                        tipo = "proxima";
+                    } else {
+                        tipo = "en_vivo";
+                    }
+                } else {
+                    tipo = "proxima";
+                }
             } else {
                 tipo = "proxima";
             }
@@ -94,7 +110,26 @@ public class SubastaController {
             return map;
         }).toList();
 
-        return ResponseEntity.ok(result);
+        var nonClosed = result.stream().filter(m -> !"cerrada".equals(m.get("tipo"))).toList();
+        var closed = result.stream()
+                .filter(m -> "cerrada".equals(m.get("tipo")))
+                .sorted((a, b) -> {
+                    String fechaA = (String) a.getOrDefault("fecha", "");
+                    String fechaB = (String) b.getOrDefault("fecha", "");
+                    int cmp = fechaB.compareTo(fechaA);
+                    if (cmp != 0) return cmp;
+                    String horaA = (String) a.getOrDefault("hora", "");
+                    String horaB = (String) b.getOrDefault("hora", "");
+                    return horaB.compareTo(horaA);
+                })
+                .limit(5)
+                .toList();
+
+        var finalResult = new java.util.ArrayList<Map<String, Object>>();
+        finalResult.addAll(nonClosed);
+        finalResult.addAll(closed);
+
+        return ResponseEntity.ok(finalResult);
     }
 
     @GetMapping("/{id}/catalogo")
@@ -213,6 +248,23 @@ public class SubastaController {
         if (!"abierta".equals(subasta.getEstado()))
             return ResponseEntity.badRequest().body(Map.of("error", "La subasta no está abierta"));
 
+        // Verificar si la subasta todavía no comenzó (es próxima)
+        var hoy = java.time.LocalDate.now();
+        boolean proxima = false;
+        if (subasta.getFecha() == null) {
+            proxima = true;
+        } else if (subasta.getFecha().isAfter(hoy)) {
+            proxima = true;
+        } else if (subasta.getFecha().isEqual(hoy)) {
+            var ahoraHora = java.time.LocalTime.now();
+            if (subasta.getHora() != null && ahoraHora.isBefore(subasta.getHora())) {
+                proxima = true;
+            }
+        }
+        if (proxima) {
+            return ResponseEntity.badRequest().body(Map.of("error", "La subasta todavía no ha comenzado."));
+        }
+
         Integer userId = usuarioRepo.findByEmail(auth.getName())
                 .map(u -> u.getIdentificador()).orElse(null);
         if (userId == null) return ResponseEntity.status(404).body(Map.of("error", "Usuario no encontrado"));
@@ -236,11 +288,13 @@ public class SubastaController {
             ));
         }
 
-        // Un usuario no puede estar en más de una subasta abierta a la vez
+        // Un usuario no puede estar en más de una subasta abierta a la vez (de hoy o futuras)
         boolean yaEnOtra = asistenteRepo.findByCliente(userId).stream()
                 .anyMatch(a -> !a.getSubasta().equals(id) &&
                         subastaRepo.findById(a.getSubasta())
-                                .map(s -> "abierta".equals(s.getEstado()))
+                                .map(s -> "abierta".equals(s.getEstado()) &&
+                                        s.getFecha() != null &&
+                                        !s.getFecha().isBefore(hoy))
                                 .orElse(false));
         if (yaEnOtra)
             return ResponseEntity.status(409).body(Map.of(
@@ -290,22 +344,58 @@ public class SubastaController {
                 .findFirst()
                 .orElse(null);
 
+        if (itemActual != null && "abierta".equals(subasta.getEstado())) {
+            // Inicializar deadline si no existe (1 hora por defecto antes de recibir ofertas)
+            java.time.LocalDateTime defaultDeadline = java.time.LocalDateTime.now().plusHours(1);
+            if (subasta.getFecha() != null && subasta.getHora() != null) {
+                boolean esPrimerItem = !todosItems.isEmpty() &&
+                        todosItems.get(0).getIdentificador().equals(itemActual.getIdentificador());
+                if (esPrimerItem) {
+                    defaultDeadline = java.time.LocalDateTime.of(subasta.getFecha(), subasta.getHora()).plusHours(1);
+                }
+            }
+            activeItemDeadlines.putIfAbsent(itemActual.getIdentificador(), defaultDeadline);
+
+            var deadline = activeItemDeadlines.get(itemActual.getIdentificador());
+            if (deadline != null && java.time.LocalDateTime.now().isAfter(deadline)) {
+                // El tiempo expiró -> finalizar el item
+                finalizarItem(itemActual, id);
+                activeItemDeadlines.remove(itemActual.getIdentificador());
+
+                // Volver a buscar el item actual
+                todosItems = itemCatalogoRepo.findByCatalogo(cat.getIdentificador());
+                itemActual = todosItems.stream()
+                        .filter(i -> !"si".equals(i.getSubastado()))
+                        .findFirst()
+                        .orElse(null);
+            }
+        }
+
+        // Si no quedan items por subastar y la subasta sigue abierta, la cerramos automáticamente
+        if (itemActual == null && total > 0 && "abierta".equals(subasta.getEstado())) {
+            subasta.setEstado("cerrada");
+            subastaRepo.save(subasta);
+        }
+
+        final var finalItemActual = itemActual;
+        final var finalTodosItems = todosItems;
+
         String descCatalogo = cat.getDescripcion();
 
         Map<String, Object> itemActualMap = null;
-        if (itemActual != null) {
-            int numero = todosItems.indexOf(itemActual) + 1;
+        if (finalItemActual != null) {
+            int numero = finalTodosItems.indexOf(finalItemActual) + 1;
 
             // Mejor oferta para el item actual
             BigDecimal mejorImporte = pujoRepo.findAll().stream()
-                    .filter(p -> p.getItem().equals(itemActual.getIdentificador()) && "si".equals(p.getGanador()))
+                    .filter(p -> p.getItem().equals(finalItemActual.getIdentificador()) && "si".equals(p.getGanador()))
                     .map(Pujo::getImporte)
                     .findFirst()
                     .orElse(null);
 
             // Pujas del item actual, ordenadas por importe desc
             var pujos = pujoRepo.findAll().stream()
-                    .filter(p -> p.getItem().equals(itemActual.getIdentificador()))
+                    .filter(p -> p.getItem().equals(finalItemActual.getIdentificador()))
                     .sorted((a, b) -> b.getImporte().compareTo(a.getImporte()))
                     .limit(10)
                     .map(p -> {
@@ -319,13 +409,30 @@ public class SubastaController {
                     })
                     .toList();
 
+            // Calcular tiempo restante en segundos
+            var deadline = activeItemDeadlines.get(finalItemActual.getIdentificador());
+            Long tiempoRestante = null;
+            if (deadline != null) {
+                tiempoRestante = java.time.Duration.between(java.time.LocalDateTime.now(), deadline).toSeconds();
+                if (tiempoRestante < 0) tiempoRestante = 0L;
+            }
+
+            // Buscar producto original para obtener las imágenes reales
+            com.subastas.entity.SolicitudItem producto = solicitudRepo.findById(finalItemActual.getProducto()).orElse(null);
+            String imagenesStr = producto != null ? producto.getArchivoComprobante() : null;
+            java.util.List<String> imagenes = (imagenesStr != null && !imagenesStr.trim().isEmpty()) 
+                    ? java.util.Arrays.asList(imagenesStr.split(",")) 
+                    : java.util.Collections.emptyList();
+
             itemActualMap = new HashMap<>();
-            itemActualMap.put("itemId",      itemActual.getIdentificador());
+            itemActualMap.put("itemId",      finalItemActual.getIdentificador());
             itemActualMap.put("numero",      numero);
             itemActualMap.put("descripcion", descCatalogo);
-            itemActualMap.put("precioBase",  itemActual.getPreciobase());
+            itemActualMap.put("precioBase",  finalItemActual.getPreciobase());
             itemActualMap.put("mejorOferta", mejorImporte);
             itemActualMap.put("pujos",       pujos);
+            itemActualMap.put("tiempoRestante", tiempoRestante);
+            itemActualMap.put("imagenes",    imagenes);
         }
 
         Map<String, Object> result = new HashMap<>();
@@ -373,20 +480,29 @@ public class SubastaController {
         if (metodoPagoRepo.findByClienteAndActivo(userId, "si").isEmpty())
             return ResponseEntity.status(403).body(Map.of("error", "Necesita al menos un medio de pago activo para pujar"));
 
-        // Mejor oferta actual para este item
+        // Buscar si ya hay alguna puja registrada para este item
         BigDecimal mejorActual = pujoRepo.findAll().stream()
                 .filter(p -> p.getItem().equals(itemId) && "si".equals(p.getGanador()))
                 .map(Pujo::getImporte)
                 .findFirst()
-                .orElse(item.getPreciobase());
+                .orElse(null);
 
         // Validar límites (no aplica a oro/platino)
         String catSubasta = subasta.getCategoria() != null ? subasta.getCategoria().toLowerCase() : "";
         boolean sinLimites = catSubasta.equals("oro") || catSubasta.equals("platino");
 
         if (!sinLimites) {
-            BigDecimal minPuja = mejorActual.add(item.getPreciobase().multiply(new BigDecimal("0.01")));
-            BigDecimal maxPuja = mejorActual.add(item.getPreciobase().multiply(new BigDecimal("0.20")));
+            BigDecimal minPuja;
+            BigDecimal maxPuja;
+            if (mejorActual == null) {
+                // Puja inicial: puede ser igual al precio base
+                minPuja = item.getPreciobase();
+                maxPuja = item.getPreciobase().multiply(new BigDecimal("1.20"));
+            } else {
+                // Siguientes pujas: deben ser superiores por un 1% y máximo 20%
+                minPuja = mejorActual.add(item.getPreciobase().multiply(new BigDecimal("0.01")));
+                maxPuja = mejorActual.add(item.getPreciobase().multiply(new BigDecimal("0.20")));
+            }
 
             if (req.importe().compareTo(minPuja) < 0)
                 return ResponseEntity.badRequest().body(Map.of(
@@ -401,9 +517,14 @@ public class SubastaController {
                         "maxPuja", maxPuja
                 ));
         } else {
-            // Subastas oro/platino: solo debe ser mayor a la mejor oferta
-            if (req.importe().compareTo(mejorActual) <= 0)
-                return ResponseEntity.badRequest().body(Map.of("error", "La puja debe ser mayor a la mejor oferta actual: " + mejorActual));
+            // Subastas oro/platino: si es la primera, debe ser mayor o igual al precio base, sino mayor a la mejor oferta
+            if (mejorActual == null) {
+                if (req.importe().compareTo(item.getPreciobase()) < 0)
+                    return ResponseEntity.badRequest().body(Map.of("error", "La puja debe ser mayor o igual al precio base: " + item.getPreciobase()));
+            } else {
+                if (req.importe().compareTo(mejorActual) <= 0)
+                    return ResponseEntity.badRequest().body(Map.of("error", "La puja debe ser mayor a la mejor oferta actual: " + mejorActual));
+            }
         }
 
         // Desmarcar el ganador anterior
@@ -419,10 +540,57 @@ public class SubastaController {
         nuevoPujo.setGanador("si");
         pujoRepo.save(nuevoPujo);
 
+        // Establecer o extender el temporizador a 2 minutos
+        activeItemDeadlines.put(itemId, java.time.LocalDateTime.now().plusMinutes(2));
+
         return ResponseEntity.status(201).body(Map.of(
                 "mensaje",     "Puja registrada",
                 "importe",     nuevoPujo.getImporte(),
                 "numeropostor", asistente.getNumeropostor()
         ));
+    }
+
+    private void finalizarItem(com.subastas.entity.ItemCatalogo item, Integer subastaId) {
+        // 1. Marcar el item como subastado
+        item.setSubastado("si");
+        itemCatalogoRepo.save(item);
+
+        // 2. Buscar la oferta ganadora (mejor oferta)
+        Pujo pujoGanador = pujoRepo.findAll().stream()
+                .filter(p -> p.getItem().equals(item.getIdentificador()) && "si".equals(p.getGanador()))
+                .findFirst()
+                .orElse(null);
+
+        if (pujoGanador != null) {
+            // 3. Obtener el producto para conocer el dueño original
+            com.subastas.entity.SolicitudItem producto = solicitudRepo.findById(item.getProducto()).orElse(null);
+
+            // 4. Obtener el cliente ganador
+            Asistente asistente = asistenteRepo.findById(pujoGanador.getAsistente()).orElse(null);
+
+            if (producto != null && asistente != null) {
+                // 5. Crear el registro de la subasta (venta)
+                com.subastas.entity.RegistroDeSubasta reg = new com.subastas.entity.RegistroDeSubasta();
+                reg.setSubasta(subastaId);
+                reg.setDuenio(producto.getDuenio());
+                reg.setProducto(item.getProducto());
+                reg.setCliente(asistente.getCliente());
+                reg.setImporte(pujoGanador.getImporte());
+
+                // Comisión pagada = importe * (comision_porcentaje / 100)
+                BigDecimal comisionPorcentaje = item.getComision();
+                BigDecimal comisionPagada = pujoGanador.getImporte()
+                        .multiply(comisionPorcentaje)
+                        .divide(new BigDecimal("100"), 2, java.math.RoundingMode.HALF_UP);
+                reg.setComision(comisionPagada);
+
+                registroRepo.save(reg);
+
+                // El producto ahora pertenece al cliente ganador y ya no está disponible
+                producto.setDisponible("no");
+                producto.setDuenio(asistente.getCliente());
+                solicitudRepo.save(producto);
+            }
+        }
     }
 }

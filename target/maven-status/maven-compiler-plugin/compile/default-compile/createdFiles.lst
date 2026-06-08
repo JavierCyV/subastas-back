@@ -21,6 +21,7 @@ com\subastas\entity\MetodoPago.class
 com\subastas\entity\Persona.class
 com\subastas\repository\DuenioRepository.class
 com\subastas\repository\UsuarioRepository.class
+com\subastas\config\WebConfig.class
 com\subastas\repository\ClienteRepository.class
 com\subastas\controller\AdminController$RechazarSolicitudRequest.class
 com\subastas\entity\ItemCatalogo.class

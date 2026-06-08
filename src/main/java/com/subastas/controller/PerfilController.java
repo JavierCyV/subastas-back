@@ -5,6 +5,7 @@ import com.subastas.repository.CatalogoRepository;
 import com.subastas.repository.RegistroDeSubastaRepository;
 import com.subastas.repository.SubastaRepository;
 import com.subastas.repository.UsuarioRepository;
+import com.subastas.repository.SolicitudItemRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -29,6 +30,7 @@ public class PerfilController {
     private final RegistroDeSubastaRepository registroRepo;
     private final SubastaRepository subastaRepo;
     private final CatalogoRepository catalogoRepo;
+    private final SolicitudItemRepository solicitudRepo;
 
     @GetMapping("/stats")
     public ResponseEntity<?> stats(Authentication auth) {
@@ -59,24 +61,55 @@ public class PerfilController {
                 .orElse(null);
         if (userId == null) return ResponseEntity.status(404).build();
 
-        // Subastas ganadas por el usuario: mapeadas por subastaId → importe
-        Map<Integer, BigDecimal> ganadas = registroRepo.findByCliente(userId).stream()
-                .collect(Collectors.toMap(
-                        r -> r.getSubasta(),
-                        r -> r.getImporte() != null ? r.getImporte() : BigDecimal.ZERO,
-                        (a, b) -> a
-                ));
+        List<Map<String, Object>> result = new java.util.ArrayList<>();
 
-        // Subastas en que participó
-        Set<Integer> subastaIds = asistenteRepo.findByCliente(userId).stream()
-                .map(a -> a.getSubasta())
-                .collect(Collectors.toSet());
+        // 1. Obtener todas las compras/ventas registradas de este cliente
+        var misGanadas = registroRepo.findByCliente(userId);
+        Set<Integer> subastasGanadasIds = new java.util.HashSet<>();
 
-        List<Map<String, Object>> result = subastaIds.stream().map(subastaId -> {
+        for (var reg : misGanadas) {
+            subastasGanadasIds.add(reg.getSubasta());
             Map<String, Object> item = new HashMap<>();
+            item.put("id", "ganada-" + reg.getIdentificador());
+            item.put("subastaId", reg.getSubasta());
+            item.put("estado", "GANADA");
+            item.put("importe", reg.getImporte() != null ? reg.getImporte() : BigDecimal.ZERO);
+
+            // Buscar el título del producto específico
+            String descItem = "Artículo subastado";
+            if (reg.getProducto() != null) {
+                var prod = solicitudRepo.findById(reg.getProducto()).orElse(null);
+                if (prod != null && prod.getTitulo() != null) {
+                    descItem = prod.getTitulo();
+                }
+            }
+            item.put("descripcion", descItem);
+
+            subastaRepo.findById(reg.getSubasta()).ifPresent(s -> {
+                item.put("fecha",     s.getFecha() != null ? s.getFecha().toString() : "");
+                item.put("categoria", s.getCategoria() != null ? s.getCategoria() : "");
+            });
+
+            if (!item.containsKey("fecha"))        item.put("fecha", "");
+            if (!item.containsKey("categoria"))    item.put("categoria", "");
+
+            result.add(item);
+        }
+
+        // 2. Obtener todas las subastas en las que participó pero no ganó nada
+        var participaciones = asistenteRepo.findByCliente(userId);
+        for (var a : participaciones) {
+            Integer subastaId = a.getSubasta();
+            // Si el usuario ya ganó al menos un artículo en esta subasta, no lo duplicamos como participación vacía
+            if (subastasGanadasIds.contains(subastaId)) {
+                continue;
+            }
+
+            Map<String, Object> item = new HashMap<>();
+            item.put("id", "participo-" + subastaId);
             item.put("subastaId", subastaId);
-            item.put("estado", ganadas.containsKey(subastaId) ? "GANADA" : "PARTICIPÓ");
-            item.put("importe", ganadas.getOrDefault(subastaId, BigDecimal.ZERO));
+            item.put("estado", "PARTICIPÓ");
+            item.put("importe", BigDecimal.ZERO);
 
             subastaRepo.findById(subastaId).ifPresent(s -> {
                 item.put("fecha",     s.getFecha() != null ? s.getFecha().toString() : "");
@@ -91,9 +124,11 @@ public class PerfilController {
             if (!item.containsKey("fecha"))        item.put("fecha", "");
             if (!item.containsKey("categoria"))    item.put("categoria", "");
 
-            return item;
-        }).sorted((a, b) -> String.valueOf(b.get("fecha")).compareTo(String.valueOf(a.get("fecha"))))
-          .collect(Collectors.toList());
+            result.add(item);
+        }
+
+        // Ordenar por fecha desc
+        result.sort((a, b) -> String.valueOf(b.get("fecha")).compareTo(String.valueOf(a.get("fecha"))));
 
         return ResponseEntity.ok(result);
     }
