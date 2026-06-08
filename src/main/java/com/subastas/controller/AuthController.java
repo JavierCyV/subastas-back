@@ -163,39 +163,6 @@ public class AuthController {
         return ResponseEntity.ok(Map.of("mensaje", "Contraseña actualizada correctamente."));
     }
 
-    // ── SOCIAL LOGIN ───────────────────────────────────────────────────────────
-    record SocialLoginRequest(@NotBlank @Email String email) {}
-
-    @PostMapping("/social-login")
-    public ResponseEntity<?> socialLogin(@Valid @RequestBody SocialLoginRequest req) {
-        var usuario = usuarioRepo.findByEmail(req.email()).orElse(null);
-
-        if (usuario == null) {
-            return ResponseEntity.status(404).body(Map.of("error", "USER_NOT_FOUND"));
-        }
-        if (!"si".equals(usuario.getAprobado())) {
-            return ResponseEntity.status(403).body(Map.of(
-                    "error", "Tu cuenta está pendiente de aprobación por un administrador"));
-        }
-
-        String token = jwtService.generateToken(
-                usuario.getEmail(), usuario.getRol(), usuario.getIdentificador());
-
-        java.util.Map<String, Object> resp = new java.util.HashMap<>();
-        resp.put("token",  token);
-        resp.put("rol",    usuario.getRol());
-        resp.put("userId", usuario.getIdentificador());
-        resp.put("nombre", usuario.getPersona() != null ? usuario.getPersona().getNombre() : "");
-
-        if ("cliente".equals(usuario.getRol())) {
-            clienteRepo.findById(usuario.getIdentificador())
-                    .ifPresent(c -> resp.put("categoria", c.getCategoria()));
-        }
-        if (!resp.containsKey("categoria")) resp.put("categoria", null);
-
-        return ResponseEntity.ok(resp);
-    }
-
     @GetMapping("/me")
     public ResponseEntity<?> me(org.springframework.security.core.Authentication auth) {
         if (auth == null) return ResponseEntity.status(401).build();

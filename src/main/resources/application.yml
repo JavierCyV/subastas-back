@@ -28,6 +28,10 @@ spring:
           auth: true
           starttls:
             enable: true
+            required: true
+          ssl:
+            trust: smtp.gmail.com
+          from: ${MAIL_USERNAME}
 
 app:
   jwt:

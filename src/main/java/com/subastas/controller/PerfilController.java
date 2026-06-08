@@ -1,19 +1,25 @@
 package com.subastas.controller;
 
+import com.subastas.entity.Multa;
+import com.subastas.entity.VictoriaPago;
 import com.subastas.repository.AsistenteRepository;
 import com.subastas.repository.CatalogoRepository;
+import com.subastas.repository.MetodoPagoRepository;
+import com.subastas.repository.MultaRepository;
 import com.subastas.repository.RegistroDeSubastaRepository;
 import com.subastas.repository.SubastaRepository;
 import com.subastas.repository.UsuarioRepository;
 import com.subastas.repository.SolicitudItemRepository;
+import com.subastas.repository.VictoriaPagoRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +37,9 @@ public class PerfilController {
     private final SubastaRepository subastaRepo;
     private final CatalogoRepository catalogoRepo;
     private final SolicitudItemRepository solicitudRepo;
+    private final MultaRepository multaRepo;
+    private final MetodoPagoRepository metodoPagoRepo;
+    private final VictoriaPagoRepository victoriaRepo;
 
     @GetMapping("/stats")
     public ResponseEntity<?> stats(Authentication auth) {
@@ -131,5 +140,125 @@ public class PerfilController {
         result.sort((a, b) -> String.valueOf(b.get("fecha")).compareTo(String.valueOf(a.get("fecha"))));
 
         return ResponseEntity.ok(result);
+    }
+
+    // ── VICTORIAS PENDIENTES DE PAGO ──────────────────────────────────────────
+
+    @GetMapping("/victorias")
+    public ResponseEntity<?> victorias(Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        Integer userId = usuarioRepo.findByEmail(auth.getName()).map(u -> u.getIdentificador()).orElse(null);
+        if (userId == null) return ResponseEntity.status(404).build();
+
+        var pendientes = victoriaRepo.findByClienteAndPagado(userId, "no").stream().map(v -> {
+            Map<String, Object> m = new HashMap<>();
+            m.put("id",      v.getIdentificador());
+            m.put("importe", v.getImporte());
+            m.put("fechavictoria", v.getFechavictoria() != null ? v.getFechavictoria().toString() : "");
+
+            registroRepo.findById(v.getRegistro()).ifPresent(reg -> {
+                if (reg.getProducto() != null) {
+                    solicitudRepo.findById(reg.getProducto())
+                        .ifPresent(p -> m.put("titulo", p.getTitulo() != null ? p.getTitulo() : "Artículo"));
+                }
+                subastaRepo.findById(reg.getSubasta())
+                    .ifPresent(s -> m.put("categoria", s.getCategoria() != null ? s.getCategoria() : ""));
+            });
+            if (!m.containsKey("titulo")) m.put("titulo", "Artículo subastado");
+            if (!m.containsKey("categoria")) m.put("categoria", "");
+
+            long horasRestantes = 72;
+            if (v.getFechavictoria() != null) {
+                long horasTranscurridas = java.time.Duration.between(v.getFechavictoria(), LocalDateTime.now()).toHours();
+                horasRestantes = Math.max(0, 72 - horasTranscurridas);
+            }
+            m.put("horasRestantes", horasRestantes);
+
+            return m;
+        }).toList();
+
+        return ResponseEntity.ok(pendientes);
+    }
+
+    record PagarRequest(Integer metodoPagoId) {}
+
+    @Transactional
+    @PostMapping("/victorias/{id}/pagar")
+    public ResponseEntity<?> pagar(@PathVariable Integer id, @RequestBody PagarRequest req, Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        Integer userId = usuarioRepo.findByEmail(auth.getName()).map(u -> u.getIdentificador()).orElse(null);
+        if (userId == null) return ResponseEntity.status(404).build();
+
+        var victoria = victoriaRepo.findById(id).orElse(null);
+        if (victoria == null || !victoria.getCliente().equals(userId))
+            return ResponseEntity.status(404).body(Map.of("error", "Victoria no encontrada"));
+        if ("si".equals(victoria.getPagado()))
+            return ResponseEntity.badRequest().body(Map.of("error", "Ya fue pagado"));
+
+        var metodoPago = metodoPagoRepo.findById(req.metodoPagoId()).orElse(null);
+        if (metodoPago == null || !metodoPago.getCliente().equals(userId))
+            return ResponseEntity.badRequest().body(Map.of("error", "Medio de pago inválido"));
+
+        victoria.setPagado("si");
+        victoria.setMetodopago(req.metodoPagoId());
+        victoriaRepo.save(victoria);
+
+        return ResponseEntity.ok(Map.of("mensaje", "Pago registrado correctamente"));
+    }
+
+    // ── MULTAS ────────────────────────────────────────────────────────────────
+
+    @GetMapping("/multas")
+    public ResponseEntity<?> multas(Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        Integer userId = usuarioRepo.findByEmail(auth.getName()).map(u -> u.getIdentificador()).orElse(null);
+        if (userId == null) return ResponseEntity.status(404).build();
+
+        var result = multaRepo.findByCliente(userId).stream().map(m -> {
+            Map<String, Object> map = new HashMap<>();
+            map.put("id",          m.getIdentificador());
+            map.put("importe",     m.getImporte());
+            map.put("motivo",      m.getMotivo());
+            map.put("pagada",      m.getPagada());
+            map.put("fechamulta",  m.getFechamulta() != null ? m.getFechamulta().toString() : "");
+
+            victoriaRepo.findById(m.getRegistro()).ifPresent(v ->
+                registroRepo.findById(v.getRegistro()).ifPresent(reg -> {
+                    if (reg.getProducto() != null) {
+                        solicitudRepo.findById(reg.getProducto())
+                            .ifPresent(p -> map.put("titulo", p.getTitulo() != null ? p.getTitulo() : "Artículo"));
+                    }
+                })
+            );
+            if (!map.containsKey("titulo")) map.put("titulo", "Artículo subastado");
+
+            return map;
+        }).toList();
+
+        return ResponseEntity.ok(result);
+    }
+
+    // ── SCHEDULER: aplicar multas a los 72h sin pago ──────────────────────────
+
+    @Scheduled(fixedDelay = 3600000) // cada hora
+    @Transactional
+    public void aplicarMultas() {
+        LocalDateTime limite = LocalDateTime.now().minusHours(72);
+        victoriaRepo.findByPagadoAndFechavictoriaBefore("no", limite).forEach(v -> {
+            if (multaRepo.existsByRegistro(v.getIdentificador())) return;
+
+            BigDecimal importeMulta = v.getImporte()
+                .multiply(new BigDecimal("0.10"))
+                .setScale(2, java.math.RoundingMode.HALF_UP);
+
+            Multa multa = new Multa();
+            multa.setRegistro(v.getIdentificador());
+            multa.setCliente(v.getCliente());
+            multa.setImporte(importeMulta);
+            multa.setMotivo("Incumplimiento de pago en 72 horas");
+            multa.setPagada("no");
+            multa.setFechamulta(LocalDateTime.now());
+            multaRepo.save(multa);
+        });
     }
 }

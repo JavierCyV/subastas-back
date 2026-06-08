@@ -1,6 +1,7 @@
 package com.subastas.service;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
@@ -16,6 +17,9 @@ public class PasswordResetService {
 
     private final JavaMailSender mailSender;
 
+    @Value("${spring.mail.username}")
+    private String from;
+
     private record Entry(String code, Instant expiry) {}
 
     // código por email, expira en 15 minutos
@@ -28,6 +32,7 @@ public class PasswordResetService {
         store.put(email, new Entry(code, Instant.now().plusSeconds(EXPIRY_MINUTES * 60L)));
 
         SimpleMailMessage msg = new SimpleMailMessage();
+        msg.setFrom(from);
         msg.setTo(email);
         msg.setSubject("Código de recuperación — Subastas");
         msg.setText(

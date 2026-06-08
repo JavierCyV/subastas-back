@@ -6,7 +6,7 @@ Get-Content "$PSScriptRoot\.env" | ForEach-Object {
 }
 
 # Buscar dinámicamente un JDK instalado en Eclipse Adoptium o Java
-$jdk = Get-ChildItem -Path "C:\Program Files\Eclipse Adoptium", "C:\Program Files\Java" -Filter "jdk-*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+$jdk = Get-ChildItem -Path "C:\Program Files\Eclipse Adoptium", "C:\Program Files\Java" -Filter "jdk-*" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
 if ($jdk) {
     $env:JAVA_HOME = $jdk.FullName
 } else {
@@ -17,7 +17,7 @@ if ($jdk) {
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
 # Ruta corregida de Maven para tu usuario actual (Usuario)
-$mvn = "C:\Users\Usuario\.m2\wrapper\dists\apache-maven-3.9.6-bin\3311e1d4\apache-maven-3.9.6\bin\mvn.cmd"
+$mvn = "C:\Users\javic\.m2\wrapper\dists\apache-maven-3.9.11\03d7e36a140982eea48e22c1dcac01d8862b2550b2939e09a0809bbc5182a5bc\bin\mvn.cmd"
 
 Set-Location $PSScriptRoot
 & $mvn clean spring-boot:run

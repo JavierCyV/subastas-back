@@ -3,6 +3,7 @@ com\subastas\config\SecurityConfig.class
 com\subastas\entity\Catalogo.class
 com\subastas\entity\Subasta.class
 com\subastas\entity\Pais.class
+com\subastas\controller\PerfilController$PagarRequest.class
 com\subastas\repository\MetodoPagoRepository.class
 com\subastas\service\PasswordResetService.class
 com\subastas\controller\SolicitudController$SolicitudRequest.class
@@ -29,7 +30,10 @@ com\subastas\entity\Asistente.class
 com\subastas\controller\AdminController.class
 com\subastas\entity\Duenio.class
 com\subastas\controller\MetodoPagoController.class
+com\subastas\entity\Multa.class
+com\subastas\entity\VictoriaPago.class
 com\subastas\repository\ItemCatalogoRepository.class
+com\subastas\repository\VictoriaPagoRepository.class
 com\subastas\controller\SubastaController.class
 com\subastas\entity\RegistroDeSubasta.class
 com\subastas\controller\AuthController$ResetRequest.class
@@ -43,8 +47,8 @@ com\subastas\controller\AdminController$TasarRequest.class
 com\subastas\controller\AuthController$ForgotRequest.class
 com\subastas\controller\AuthController.class
 com\subastas\entity\Usuario.class
+com\subastas\repository\MultaRepository.class
 com\subastas\repository\AsistenteRepository.class
-com\subastas\controller\AuthController$SocialLoginRequest.class
 com\subastas\repository\SolicitudItemRepository.class
 com\subastas\controller\AuthController$RegisterRequest.class
 com\subastas\entity\Pujo.class

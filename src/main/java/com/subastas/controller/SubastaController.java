@@ -6,15 +6,21 @@ import com.subastas.repository.AsistenteRepository;
 import com.subastas.repository.CatalogoRepository;
 import com.subastas.repository.ClienteRepository;
 import com.subastas.repository.ItemCatalogoRepository;
+import com.subastas.entity.VictoriaPago;
 import com.subastas.repository.MetodoPagoRepository;
 import com.subastas.repository.PujoRepository;
 import com.subastas.repository.RegistroDeSubastaRepository;
 import com.subastas.repository.SolicitudItemRepository;
 import com.subastas.repository.SubastaRepository;
 import com.subastas.repository.UsuarioRepository;
+import com.subastas.repository.VictoriaPagoRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.core.Authentication;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -39,6 +45,8 @@ public class SubastaController {
     private final ClienteRepository clienteRepo;
     private final MetodoPagoRepository metodoPagoRepo;
     private final SolicitudItemRepository solicitudRepo;
+    private final VictoriaPagoRepository victoriaRepo;
+    private final JavaMailSender mailSender;
 
     // Mapa para almacenar los temporizadores de las subastas activas (itemId -> deadline)
     private final Map<Integer, java.time.LocalDateTime> activeItemDeadlines = new java.util.concurrent.ConcurrentHashMap<>();
@@ -386,17 +394,16 @@ public class SubastaController {
         if (finalItemActual != null) {
             int numero = finalTodosItems.indexOf(finalItemActual) + 1;
 
-            // Mejor oferta para el item actual
-            BigDecimal mejorImporte = pujoRepo.findAll().stream()
-                    .filter(p -> p.getItem().equals(finalItemActual.getIdentificador()) && "si".equals(p.getGanador()))
+            // Pujas del item actual, ordenadas por importe desc
+            var pujosItem = pujoRepo.findByItemOrderByImporteDesc(finalItemActual.getIdentificador());
+
+            BigDecimal mejorImporte = pujosItem.stream()
+                    .filter(p -> "si".equals(p.getGanador()))
                     .map(Pujo::getImporte)
                     .findFirst()
                     .orElse(null);
 
-            // Pujas del item actual, ordenadas por importe desc
-            var pujos = pujoRepo.findAll().stream()
-                    .filter(p -> p.getItem().equals(finalItemActual.getIdentificador()))
-                    .sorted((a, b) -> b.getImporte().compareTo(a.getImporte()))
+            var pujos = pujosItem.stream()
                     .limit(10)
                     .map(p -> {
                         var asistente = asistenteRepo.findById(p.getAsistente()).orElse(null);
@@ -447,6 +454,7 @@ public class SubastaController {
 
     record PujarRequest(BigDecimal importe) {}
 
+    @Transactional
     @PostMapping("/{id}/items/{itemId}/pujar")
     public ResponseEntity<?> pujar(@PathVariable Integer id,
                                    @PathVariable Integer itemId,
@@ -480,11 +488,9 @@ public class SubastaController {
         if (metodoPagoRepo.findByClienteAndActivo(userId, "si").isEmpty())
             return ResponseEntity.status(403).body(Map.of("error", "Necesita al menos un medio de pago activo para pujar"));
 
-        // Buscar si ya hay alguna puja registrada para este item
-        BigDecimal mejorActual = pujoRepo.findAll().stream()
-                .filter(p -> p.getItem().equals(itemId) && "si".equals(p.getGanador()))
+        // Buscar si ya hay alguna puja registrada para este item (con lock pesimista)
+        BigDecimal mejorActual = pujoRepo.findGanadorByItemForUpdate(itemId)
                 .map(Pujo::getImporte)
-                .findFirst()
                 .orElse(null);
 
         // Validar límites (no aplica a oro/platino)
@@ -528,9 +534,7 @@ public class SubastaController {
         }
 
         // Desmarcar el ganador anterior
-        pujoRepo.findAll().stream()
-                .filter(p -> p.getItem().equals(itemId) && "si".equals(p.getGanador()))
-                .forEach(p -> { p.setGanador("no"); pujoRepo.save(p); });
+        pujoRepo.desmarcarGanadorByItem(itemId);
 
         // Registrar nueva puja
         Pujo nuevoPujo = new Pujo();
@@ -555,42 +559,101 @@ public class SubastaController {
         item.setSubastado("si");
         itemCatalogoRepo.save(item);
 
-        // 2. Buscar la oferta ganadora (mejor oferta)
-        Pujo pujoGanador = pujoRepo.findAll().stream()
-                .filter(p -> p.getItem().equals(item.getIdentificador()) && "si".equals(p.getGanador()))
-                .findFirst()
-                .orElse(null);
+        // 2. Buscar la oferta ganadora
+        Pujo pujoGanador = pujoRepo.findGanadorByItem(item.getIdentificador()).orElse(null);
 
-        if (pujoGanador != null) {
-            // 3. Obtener el producto para conocer el dueño original
-            com.subastas.entity.SolicitudItem producto = solicitudRepo.findById(item.getProducto()).orElse(null);
+        if (pujoGanador == null) return; // Nadie pujó: el item se marca subastado sin registro de venta
 
-            // 4. Obtener el cliente ganador
-            Asistente asistente = asistenteRepo.findById(pujoGanador.getAsistente()).orElse(null);
+        com.subastas.entity.SolicitudItem producto = solicitudRepo.findById(item.getProducto()).orElse(null);
+        Asistente asistente = asistenteRepo.findById(pujoGanador.getAsistente()).orElse(null);
 
-            if (producto != null && asistente != null) {
-                // 5. Crear el registro de la subasta (venta)
-                com.subastas.entity.RegistroDeSubasta reg = new com.subastas.entity.RegistroDeSubasta();
-                reg.setSubasta(subastaId);
-                reg.setDuenio(producto.getDuenio());
-                reg.setProducto(item.getProducto());
-                reg.setCliente(asistente.getCliente());
-                reg.setImporte(pujoGanador.getImporte());
+        if (producto == null || asistente == null) return;
 
-                // Comisión pagada = importe * (comision_porcentaje / 100)
-                BigDecimal comisionPorcentaje = item.getComision();
-                BigDecimal comisionPagada = pujoGanador.getImporte()
-                        .multiply(comisionPorcentaje)
-                        .divide(new BigDecimal("100"), 2, java.math.RoundingMode.HALF_UP);
-                reg.setComision(comisionPagada);
-
-                registroRepo.save(reg);
-
-                // El producto ahora pertenece al cliente ganador y ya no está disponible
-                producto.setDisponible("no");
-                producto.setDuenio(asistente.getCliente());
-                solicitudRepo.save(producto);
+        // 3. Crear el registro de venta solo si hay duenio (vendedor)
+        if (producto.getDuenio() != null) {
+            BigDecimal comisionPorcentaje = item.getComision() != null ? item.getComision() : BigDecimal.ZERO;
+            BigDecimal comisionPagada = pujoGanador.getImporte()
+                    .multiply(comisionPorcentaje)
+                    .divide(new BigDecimal("100"), 2, java.math.RoundingMode.HALF_UP);
+            // Cumplir constraint: comision > 0.01
+            if (comisionPagada.compareTo(new BigDecimal("0.01")) < 0) {
+                comisionPagada = new BigDecimal("0.01");
             }
+
+            com.subastas.entity.RegistroDeSubasta reg = new com.subastas.entity.RegistroDeSubasta();
+            reg.setSubasta(subastaId);
+            reg.setDuenio(producto.getDuenio());
+            reg.setProducto(item.getProducto());
+            reg.setCliente(asistente.getCliente());
+            reg.setImporte(pujoGanador.getImporte());
+            reg.setComision(comisionPagada);
+            com.subastas.entity.RegistroDeSubasta savedReg = registroRepo.save(reg);
+
+            VictoriaPago victoria = new VictoriaPago();
+            victoria.setRegistro(savedReg.getIdentificador());
+            victoria.setCliente(asistente.getCliente());
+            victoria.setImporte(pujoGanador.getImporte());
+            victoria.setFechavictoria(java.time.LocalDateTime.now());
+            victoria.setPagado("no");
+            victoriaRepo.save(victoria);
         }
+
+        // 4. Marcar producto como no disponible
+        producto.setDisponible("no");
+        solicitudRepo.save(producto);
+
+        // 5. Notificar al ganador por email
+        try {
+            usuarioRepo.findById(asistente.getCliente()).ifPresent(u -> {
+                String titulo = producto.getTitulo() != null ? producto.getTitulo() : "artículo";
+                SimpleMailMessage msg = new SimpleMailMessage();
+                msg.setTo(u.getEmail());
+                msg.setSubject("¡Ganaste la subasta! — Subastas");
+                msg.setText(
+                    "¡Felicitaciones! Ganaste el artículo \"" + titulo + "\".\n\n" +
+                    "Importe final: $" + pujoGanador.getImporte() + "\n" +
+                    "Subasta #" + subastaId + "\n\n" +
+                    "Te contactaremos para coordinar la entrega y el pago.\n\n" +
+                    "Importante: tenés 72 horas para presentar los fondos. " +
+                    "En caso de no hacerlo, se aplicará una multa del 10% del importe ganado."
+                );
+                mailSender.send(msg);
+            });
+        } catch (Exception ignored) {
+            // No interrumpir el cierre del item por un fallo de email
+        }
+    }
+
+    @Scheduled(fixedDelay = 30000)
+    @Transactional
+    public void cerrarSubastasFinalizadas() {
+        subastaRepo.findByEstado("abierta").forEach(subasta -> {
+            var cat = catalogoRepo.findBySubasta(subasta.getIdentificador()).orElse(null);
+            if (cat == null) return;
+
+            var items = itemCatalogoRepo.findByCatalogo(cat.getIdentificador());
+            if (items.isEmpty()) return;
+
+            // Procesar items con deadline expirado
+            items.stream()
+                .filter(i -> !"si".equals(i.getSubastado()))
+                .filter(i -> {
+                    var deadline = activeItemDeadlines.get(i.getIdentificador());
+                    return deadline != null && java.time.LocalDateTime.now().isAfter(deadline);
+                })
+                .forEach(i -> {
+                    finalizarItem(i, subasta.getIdentificador());
+                    activeItemDeadlines.remove(i.getIdentificador());
+                });
+
+            // Cerrar la subasta si todos los items están subastados
+            boolean todosFinalizados = itemCatalogoRepo.findByCatalogo(cat.getIdentificador())
+                .stream().allMatch(i -> "si".equals(i.getSubastado()));
+
+            if (todosFinalizados) {
+                subasta.setEstado("cerrada");
+                subastaRepo.save(subasta);
+            }
+        });
     }
 }
