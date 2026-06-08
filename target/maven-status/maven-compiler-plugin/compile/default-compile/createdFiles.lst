@@ -3,7 +3,6 @@ com\subastas\config\SecurityConfig.class
 com\subastas\entity\Catalogo.class
 com\subastas\entity\Subasta.class
 com\subastas\entity\Pais.class
-com\subastas\controller\PerfilController$PagarRequest.class
 com\subastas\repository\MetodoPagoRepository.class
 com\subastas\service\PasswordResetService.class
 com\subastas\controller\SolicitudController$SolicitudRequest.class

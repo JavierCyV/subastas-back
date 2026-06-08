@@ -6,14 +6,12 @@ import com.subastas.repository.AsistenteRepository;
 import com.subastas.repository.CatalogoRepository;
 import com.subastas.repository.ClienteRepository;
 import com.subastas.repository.ItemCatalogoRepository;
-import com.subastas.entity.VictoriaPago;
 import com.subastas.repository.MetodoPagoRepository;
 import com.subastas.repository.PujoRepository;
 import com.subastas.repository.RegistroDeSubastaRepository;
 import com.subastas.repository.SolicitudItemRepository;
 import com.subastas.repository.SubastaRepository;
 import com.subastas.repository.UsuarioRepository;
-import com.subastas.repository.VictoriaPagoRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mail.SimpleMailMessage;
@@ -45,7 +43,6 @@ public class SubastaController {
     private final ClienteRepository clienteRepo;
     private final MetodoPagoRepository metodoPagoRepo;
     private final SolicitudItemRepository solicitudRepo;
-    private final VictoriaPagoRepository victoriaRepo;
     private final JavaMailSender mailSender;
 
     // Mapa para almacenar los temporizadores de las subastas activas (itemId -> deadline)
@@ -589,13 +586,6 @@ public class SubastaController {
             reg.setComision(comisionPagada);
             com.subastas.entity.RegistroDeSubasta savedReg = registroRepo.save(reg);
 
-            VictoriaPago victoria = new VictoriaPago();
-            victoria.setRegistro(savedReg.getIdentificador());
-            victoria.setCliente(asistente.getCliente());
-            victoria.setImporte(pujoGanador.getImporte());
-            victoria.setFechavictoria(java.time.LocalDateTime.now());
-            victoria.setPagado("no");
-            victoriaRepo.save(victoria);
         }
 
         // 4. Marcar producto como no disponible
