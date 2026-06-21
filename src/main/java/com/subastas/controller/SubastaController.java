@@ -6,10 +6,16 @@ import com.subastas.repository.AsistenteRepository;
 import com.subastas.repository.CatalogoRepository;
 import com.subastas.repository.ClienteRepository;
 import com.subastas.repository.ItemCatalogoRepository;
+import com.subastas.repository.CompraEmpresaRepository;
+import com.subastas.repository.MetodoPagoGarantiaRepository;
 import com.subastas.repository.MetodoPagoRepository;
+import com.subastas.repository.MetodoPagoVerificacionRepository;
+import com.subastas.repository.MultaRepository;
 import com.subastas.repository.PujoRepository;
+import com.subastas.repository.PujoTimestampRepository;
 import com.subastas.repository.RegistroDeSubastaRepository;
 import com.subastas.repository.SolicitudItemRepository;
+import com.subastas.repository.SubastaMonedaRepository;
 import com.subastas.repository.SubastaRepository;
 import com.subastas.repository.UsuarioRepository;
 import com.subastas.repository.VictoriaPagoRepository;
@@ -35,6 +41,7 @@ import java.util.stream.Collectors;
 public class SubastaController {
 
     private final SubastaRepository subastaRepo;
+    private final SubastaMonedaRepository subastaMonedaRepo;
     private final CatalogoRepository catalogoRepo;
     private final ItemCatalogoRepository itemCatalogoRepo;
     private final PujoRepository pujoRepo;
@@ -43,8 +50,13 @@ public class SubastaController {
     private final UsuarioRepository usuarioRepo;
     private final ClienteRepository clienteRepo;
     private final MetodoPagoRepository metodoPagoRepo;
+    private final MetodoPagoGarantiaRepository garantiaRepo;
+    private final MetodoPagoVerificacionRepository verificacionRepo;
     private final SolicitudItemRepository solicitudRepo;
     private final VictoriaPagoRepository victoriaRepo;
+    private final MultaRepository multaRepo;
+    private final PujoTimestampRepository pujoTimestampRepo;
+    private final CompraEmpresaRepository compraEmpresaRepo;
     private final JavaMailSender mailSender;
 
     // Mapa para almacenar los temporizadores de las subastas activas (itemId -> deadline)
@@ -76,6 +88,8 @@ public class SubastaController {
             map.put("fecha",     s.getFecha() != null ? s.getFecha().toString() : "");
             map.put("hora",      s.getHora()  != null ? s.getHora().toString()  : "");
             map.put("ubicacion", s.getUbicacion() != null ? s.getUbicacion() : "");
+            map.put("moneda", subastaMonedaRepo.findBySubastaId(s.getIdentificador())
+                    .map(sm -> sm.getMoneda()).orElse("ARS"));
 
             // tipo: en_vivo | proxima | cerrada
             String tipo;
@@ -154,11 +168,12 @@ public class SubastaController {
             ))
             .toList();
 
-        return ResponseEntity.ok(Map.of(
-            "catalogoId",   cat.getIdentificador(),
-            "descripcion",  cat.getDescripcion(),
-            "items",        items
-        ));
+        var result = new HashMap<String, Object>();
+        result.put("catalogoId",  cat.getIdentificador());
+        result.put("descripcion", cat.getDescripcion());
+        result.put("items",       items);
+        result.put("moneda",      subastaMonedaRepo.findBySubastaId(id).map(sm -> sm.getMoneda()).orElse("ARS"));
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/{id}/resultado")
@@ -210,12 +225,16 @@ public class SubastaController {
                     var asistente = asistenteRepo.findById(p.getAsistente()).orElse(null);
                     int numPostor = asistente != null ? asistente.getNumeropostor() : 0;
                     boolean esYo  = p.getAsistente().equals(miAsistenteId);
-                    return Map.<String, Object>of(
-                            "numeropostor", esYo ? "Vos"   : "Postor #" + numPostor,
-                            "importe",      p.getImporte(),
-                            "esYo",         esYo,
-                            "ganador",      "si".equals(p.getGanador())
-                    );
+                    String fechaPujo = pujoTimestampRepo.findById(p.getIdentificador())
+                            .map(pt -> pt.getFechaPujo().toString())
+                            .orElse(null);
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("numeropostor", esYo ? "Vos" : "Postor #" + numPostor);
+                    m.put("importe", p.getImporte());
+                    m.put("esYo", esYo);
+                    m.put("ganador", "si".equals(p.getGanador()));
+                    if (fechaPujo != null) m.put("fechaPujo", fechaPujo);
+                    return m;
                 })
                 .collect(Collectors.toList());
 
@@ -237,6 +256,7 @@ public class SubastaController {
         result.put("descripcion", descripcion);
         result.put("fecha",       subasta.getFecha() != null ? subasta.getFecha().toString() : "");
         result.put("categoria",   subasta.getCategoria() != null ? subasta.getCategoria() : "");
+        result.put("moneda",      subastaMonedaRepo.findBySubastaId(id).map(sm -> sm.getMoneda()).orElse("ARS"));
         result.put("estado",      estado);
         result.put("miImporte",   miImporte);
         result.put("pujos",       pujos);
@@ -275,6 +295,13 @@ public class SubastaController {
         Integer userId = usuarioRepo.findByEmail(auth.getName())
                 .map(u -> u.getIdentificador()).orElse(null);
         if (userId == null) return ResponseEntity.status(404).body(Map.of("error", "Usuario no encontrado"));
+
+        // Verificar multas impagas
+        boolean tieneMultas = multaRepo.findByCliente(userId).stream()
+                .anyMatch(m -> "no".equals(m.getPagada()));
+        if (tieneMultas)
+            return ResponseEntity.status(403).body(Map.of("error",
+                    "Tenés multas pendientes. Debes pagarlas antes de participar en otra subasta."));
 
         // Verificar categoría del usuario
         var cliente = clienteRepo.findById(userId).orElse(null);
@@ -407,11 +434,15 @@ public class SubastaController {
                     .map(p -> {
                         var asistente = asistenteRepo.findById(p.getAsistente()).orElse(null);
                         int numPostor = asistente != null ? asistente.getNumeropostor() : 0;
-                        return Map.<String, Object>of(
-                                "numPostor", numPostor,
-                                "importe",   p.getImporte(),
-                                "ganador",   "si".equals(p.getGanador())
-                        );
+                        String fechaPujo = pujoTimestampRepo.findById(p.getIdentificador())
+                                .map(pt -> pt.getFechaPujo().toString())
+                                .orElse(null);
+                        Map<String, Object> m = new HashMap<>();
+                        m.put("numPostor", numPostor);
+                        m.put("importe", p.getImporte());
+                        m.put("ganador", "si".equals(p.getGanador()));
+                        if (fechaPujo != null) m.put("fechaPujo", fechaPujo);
+                        return m;
                     })
                     .toList();
 
@@ -444,6 +475,7 @@ public class SubastaController {
         Map<String, Object> result = new HashMap<>();
         result.put("subastaId",  id);
         result.put("estado",     subasta.getEstado());
+        result.put("moneda",     subastaMonedaRepo.findBySubastaId(id).map(sm -> sm.getMoneda()).orElse("ARS"));
         result.put("totalItems", total);
         result.put("itemActual", itemActualMap);
         return ResponseEntity.ok(result);
@@ -484,8 +516,32 @@ public class SubastaController {
             return ResponseEntity.badRequest().body(Map.of("error", "No está unido a esta subasta. Use /unirse primero."));
 
         // Verificar medio de pago
-        if (metodoPagoRepo.findByClienteAndActivo(userId, "si").isEmpty())
+        var misPagos = metodoPagoRepo.findByClienteAndActivo(userId, "si");
+        if (misPagos.isEmpty())
             return ResponseEntity.status(403).body(Map.of("error", "Necesita al menos un medio de pago activo para pujar"));
+
+        // Verificar que al menos un medio de pago esté verificado por la empresa
+        boolean algunoVerificado = misPagos.stream()
+                .anyMatch(p -> verificacionRepo.findById(p.getIdentificador())
+                        .map(v -> "si".equals(v.getVerificado()))
+                        .orElse(false));
+        if (!algunoVerificado)
+            return ResponseEntity.status(403).body(Map.of("error", "Necesita al menos un medio de pago verificado por la empresa para pujar"));
+
+        // Verificar límite de garantía para cheques
+        BigDecimal totalGarantia = misPagos.stream()
+                .filter(p -> "cheque".equals(p.getTipo()))
+                .map(p -> garantiaRepo.findById(p.getIdentificador()).orElse(null))
+                .filter(g -> g != null)
+                .map(g -> g.getMontoGarantia())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (totalGarantia.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal totalCompras = registroRepo.sumImporteByCliente(userId);
+            BigDecimal totalConPuja = totalCompras != null ? totalCompras.add(req.importe()) : req.importe();
+            if (totalConPuja.compareTo(totalGarantia) > 0)
+                return ResponseEntity.status(403).body(Map.of("error",
+                        "El monto total de tus compras (" + totalConPuja + ") supera la garantía de tus cheques (" + totalGarantia + ")"));
+        }
 
         // Buscar si ya hay alguna puja registrada para este item (con lock pesimista)
         BigDecimal mejorActual = pujoRepo.findGanadorByItemForUpdate(itemId)
@@ -543,6 +599,12 @@ public class SubastaController {
         nuevoPujo.setGanador("si");
         pujoRepo.save(nuevoPujo);
 
+        // Registrar timestamp de la puja
+        com.subastas.entity.PujoTimestamp pt = new com.subastas.entity.PujoTimestamp();
+        pt.setPujoId(nuevoPujo.getIdentificador());
+        pt.setFechaPujo(java.time.LocalDateTime.now());
+        pujoTimestampRepo.save(pt);
+
         // Establecer o extender el temporizador a 2 minutos
         activeItemDeadlines.put(itemId, java.time.LocalDateTime.now().plusMinutes(2));
 
@@ -561,9 +623,23 @@ public class SubastaController {
         // 2. Buscar la oferta ganadora
         Pujo pujoGanador = pujoRepo.findGanadorByItem(item.getIdentificador()).orElse(null);
 
-        if (pujoGanador == null) return; // Nadie pujó: el item se marca subastado sin registro de venta
-
         com.subastas.entity.SolicitudItem producto = solicitudRepo.findById(item.getProducto()).orElse(null);
+
+        if (pujoGanador == null) {
+            // 2b. Nadie pujó: la empresa compra al precio base
+            if (producto != null) {
+                com.subastas.entity.CompraEmpresa ce = new com.subastas.entity.CompraEmpresa();
+                ce.setSubasta(subastaId);
+                ce.setProducto(item.getProducto());
+                ce.setItem(item.getIdentificador());
+                ce.setImporte(item.getPreciobase());
+                compraEmpresaRepo.save(ce);
+
+                producto.setDisponible("no");
+                solicitudRepo.save(producto);
+            }
+            return;
+        }
         Asistente asistente = asistenteRepo.findById(pujoGanador.getAsistente()).orElse(null);
 
         if (producto == null || asistente == null) return;

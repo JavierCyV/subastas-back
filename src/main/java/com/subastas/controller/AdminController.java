@@ -31,6 +31,9 @@ public class AdminController {
     private final DuenioRepository duenioRepo;
     private final SubastaRepository subastaRepo;
     private final SolicitudItemRepository solicitudRepo;
+    private final SubastaMonedaRepository subastaMonedaRepo;
+    private final MetodoPagoRepository metodoPagoRepo;
+    private final MetodoPagoVerificacionRepository metodoPagoVerificacionRepo;
     private final JavaMailSender mailSender;
 
     // ── USUARIOS PENDIENTES ────────────────────────────────────────────────────
@@ -51,13 +54,16 @@ public class AdminController {
         return ResponseEntity.ok(pendientes);
     }
 
+    record AprobarRequest(String categoria) {}
+
     @PutMapping("/usuarios/{id}/aprobar")
-    public ResponseEntity<?> aprobar(@PathVariable Integer id) {
+    public ResponseEntity<?> aprobar(@PathVariable Integer id, @RequestBody(required = false) AprobarRequest req) {
         return usuarioRepo.findById(id).map(u -> {
             u.setAprobado("si");
             usuarioRepo.save(u);
             clienteRepo.findById(id).ifPresent(c -> {
                 c.setAdmitido("si");
+                if (req != null && req.categoria() != null) c.setCategoria(req.categoria());
                 clienteRepo.save(c);
             });
 
@@ -123,7 +129,8 @@ public class AdminController {
         String ubicacion,
         Integer capacidadAsistentes,
         String tieneDeposito,
-        String seguridadPropia
+        String seguridadPropia,
+        String moneda
     ) {}
 
     @GetMapping("/subastas")
@@ -143,6 +150,14 @@ public class AdminController {
         s.setTieneDeposito(req.tieneDeposito());
         s.setSeguridadPropia(req.seguridadPropia());
         s = subastaRepo.save(s);
+
+        if (req.moneda() != null && !req.moneda().isBlank()) {
+            SubastaMoneda sm = new SubastaMoneda();
+            sm.setSubastaId(s.getIdentificador());
+            sm.setMoneda(req.moneda().toUpperCase());
+            subastaMonedaRepo.save(sm);
+        }
+
         return ResponseEntity.status(201).body(toMap(s));
     }
 
@@ -218,6 +233,22 @@ public class AdminController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    // ── VERIFICAR MEDIO DE PAGO ─────────────────────────────────────────────
+
+    @PutMapping("/pagos/{id}/verificar")
+    public ResponseEntity<?> verificarPago(@PathVariable Integer id) {
+        return metodoPagoRepo.findById(id).map(p -> {
+            var v = metodoPagoVerificacionRepo.findById(id).orElseGet(() -> {
+                var nuevo = new com.subastas.entity.MetodoPagoVerificacion();
+                nuevo.setMetodoPagoId(id);
+                return nuevo;
+            });
+            v.setVerificado("si");
+            metodoPagoVerificacionRepo.save(v);
+            return ResponseEntity.ok(Map.of("mensaje", "Método de pago verificado"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
     private Map<String, Object> solicitudToMap(com.subastas.entity.SolicitudItem s) {
         var map = new HashMap<String, Object>();
         map.put("id", s.getIdentificador());
@@ -235,13 +266,17 @@ public class AdminController {
     }
 
     private Map<String, Object> toMap(Subasta s) {
+        String moneda = subastaMonedaRepo.findBySubastaId(s.getIdentificador())
+                .map(sm -> sm.getMoneda())
+                .orElse("ARS");
         return Map.of(
                 "id", s.getIdentificador(),
                 "fecha", s.getFecha() != null ? s.getFecha().toString() : "",
                 "hora", s.getHora() != null ? s.getHora().toString() : "",
                 "estado", s.getEstado() != null ? s.getEstado() : "",
                 "categoria", s.getCategoria() != null ? s.getCategoria() : "",
-                "ubicacion", s.getUbicacion() != null ? s.getUbicacion() : ""
+                "ubicacion", s.getUbicacion() != null ? s.getUbicacion() : "",
+                "moneda", moneda
         );
     }
 }

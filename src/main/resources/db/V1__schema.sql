@@ -15,24 +15,31 @@ SET search_path TO public;
 -- ----------------------------------------------------------------
 DROP FUNCTION IF EXISTS fn_check_fecha_subasta() CASCADE;
 
-DROP TABLE IF EXISTS metodosdepago      CASCADE;
-DROP TABLE IF EXISTS usuarios           CASCADE;
-DROP TABLE IF EXISTS registrodesubasta  CASCADE;
-DROP TABLE IF EXISTS pujos              CASCADE;
-DROP TABLE IF EXISTS asistentes         CASCADE;
-DROP TABLE IF EXISTS itemscatalogo      CASCADE;
-DROP TABLE IF EXISTS catalogos          CASCADE;
-DROP TABLE IF EXISTS fotos              CASCADE;
-DROP TABLE IF EXISTS productos          CASCADE;
-DROP TABLE IF EXISTS subastas           CASCADE;
-DROP TABLE IF EXISTS subastadores       CASCADE;
-DROP TABLE IF EXISTS duenios            CASCADE;
-DROP TABLE IF EXISTS clientes           CASCADE;
-DROP TABLE IF EXISTS sectores           CASCADE;
-DROP TABLE IF EXISTS seguros            CASCADE;
-DROP TABLE IF EXISTS empleados          CASCADE;
-DROP TABLE IF EXISTS personas           CASCADE;
-DROP TABLE IF EXISTS paises             CASCADE;
+DROP TABLE IF EXISTS compras_empresa           CASCADE;
+DROP TABLE IF EXISTS metodospago_verificacion  CASCADE;
+DROP TABLE IF EXISTS metodospago_garantia      CASCADE;
+DROP TABLE IF EXISTS subastas_moneda           CASCADE;
+DROP TABLE IF EXISTS pujos_timestamp           CASCADE;
+DROP TABLE IF EXISTS victoriaspago             CASCADE;
+DROP TABLE IF EXISTS multas                    CASCADE;
+DROP TABLE IF EXISTS metodosdepago             CASCADE;
+DROP TABLE IF EXISTS usuarios                  CASCADE;
+DROP TABLE IF EXISTS registrodesubasta         CASCADE;
+DROP TABLE IF EXISTS pujos                     CASCADE;
+DROP TABLE IF EXISTS asistentes                CASCADE;
+DROP TABLE IF EXISTS itemscatalogo             CASCADE;
+DROP TABLE IF EXISTS catalogos                 CASCADE;
+DROP TABLE IF EXISTS fotos                     CASCADE;
+DROP TABLE IF EXISTS productos                 CASCADE;
+DROP TABLE IF EXISTS subastas                  CASCADE;
+DROP TABLE IF EXISTS subastadores              CASCADE;
+DROP TABLE IF EXISTS duenios                   CASCADE;
+DROP TABLE IF EXISTS clientes                  CASCADE;
+DROP TABLE IF EXISTS sectores                  CASCADE;
+DROP TABLE IF EXISTS seguros                   CASCADE;
+DROP TABLE IF EXISTS empleados                 CASCADE;
+DROP TABLE IF EXISTS personas                  CASCADE;
+DROP TABLE IF EXISTS paises                    CASCADE;
 
 -- ----------------------------------------------------------------
 -- PASO 2: CREAR TABLAS (solo PK y CHECK, sin FK por ahora)
@@ -216,6 +223,66 @@ CREATE TABLE metodosdepago (
     activo        VARCHAR(2)   NOT NULL DEFAULT 'si' CONSTRAINT chkactivo CHECK (activo IN ('si','no')),
     fechaalta     TIMESTAMP    NOT NULL DEFAULT NOW(),
     CONSTRAINT pk_metodosdepago PRIMARY KEY (identificador)
+);
+
+-- ----------------------------------------------------------------
+-- PASO 2b: TABLAS NUEVAS (multas, victorias, timestamps, moneda, etc.)
+-- ----------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS multas (
+    identificador SERIAL NOT NULL,
+    registro INT REFERENCES registrodesubasta(identificador),
+    cliente INT REFERENCES clientes(identificador),
+    importe DECIMAL(18,2),
+    motivo VARCHAR(500),
+    pagada VARCHAR(2) DEFAULT 'no',
+    fechamulta TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT pk_multas PRIMARY KEY (identificador)
+);
+
+CREATE TABLE IF NOT EXISTS victoriaspago (
+    identificador SERIAL NOT NULL,
+    registro INT REFERENCES registrodesubasta(identificador),
+    cliente INT REFERENCES clientes(identificador),
+    importe DECIMAL(18,2),
+    fechavictoria TIMESTAMP DEFAULT NOW(),
+    pagado VARCHAR(2) DEFAULT 'no',
+    metodopago INT REFERENCES metodosdepago(identificador),
+    CONSTRAINT pk_victoriaspago PRIMARY KEY (identificador)
+);
+
+CREATE TABLE IF NOT EXISTS pujos_timestamp (
+    pujo_id INT NOT NULL REFERENCES pujos(identificador),
+    fecha_pujo TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_pujos_timestamp PRIMARY KEY (pujo_id)
+);
+
+CREATE TABLE IF NOT EXISTS subastas_moneda (
+    subasta_id INT NOT NULL REFERENCES subastas(identificador),
+    moneda VARCHAR(3) NOT NULL DEFAULT 'ARS' CHECK (moneda IN ('ARS','USD')),
+    CONSTRAINT pk_subastas_moneda PRIMARY KEY (subasta_id)
+);
+
+CREATE TABLE IF NOT EXISTS metodospago_garantia (
+    metodopago_id INT NOT NULL REFERENCES metodosdepago(identificador),
+    monto_garantia DECIMAL(18,2) NOT NULL CHECK (monto_garantia > 0),
+    CONSTRAINT pk_metodospago_garantia PRIMARY KEY (metodopago_id)
+);
+
+CREATE TABLE IF NOT EXISTS metodospago_verificacion (
+    metodopago_id INT NOT NULL REFERENCES metodosdepago(identificador),
+    verificado VARCHAR(2) NOT NULL DEFAULT 'no' CHECK (verificado IN ('si','no')),
+    CONSTRAINT pk_metodospago_verificacion PRIMARY KEY (metodopago_id)
+);
+
+CREATE TABLE IF NOT EXISTS compras_empresa (
+    identificador SERIAL NOT NULL,
+    subasta INT NOT NULL REFERENCES subastas(identificador),
+    producto INT NOT NULL REFERENCES productos(identificador),
+    item INT NOT NULL REFERENCES itemscatalogo(identificador),
+    importe DECIMAL(18,2) NOT NULL,
+    fecha TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT pk_compras_empresa PRIMARY KEY (identificador)
 );
 
 -- ----------------------------------------------------------------
