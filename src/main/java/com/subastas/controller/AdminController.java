@@ -58,6 +58,9 @@ public class AdminController {
             usuarioRepo.save(u);
             clienteRepo.findById(id).ifPresent(c -> {
                 c.setAdmitido("si");
+                if (c.getCategoria() == null || c.getCategoria().trim().isEmpty()) {
+                    c.setCategoria("comun");
+                }
                 clienteRepo.save(c);
             });
 

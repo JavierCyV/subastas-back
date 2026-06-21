@@ -97,6 +97,7 @@ public class AuthController {
         if ("cliente".equals(req.rol())) {
             Cliente c = new Cliente();
             c.setIdentificador(persona.getIdentificador());
+            c.setCategoria("comun");
             // verificador = 1 (admin del sistema); se puede configurar
             c.setVerificador(1);
             clienteRepo.save(c);

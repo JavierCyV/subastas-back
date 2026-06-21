@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.util.Map;
+import java.util.HashMap;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @RestController
 @RequestMapping("/api/solicitudes")
@@ -18,6 +20,7 @@ public class SolicitudController {
 
     private final SolicitudItemRepository solicitudRepo;
     private final UsuarioRepository usuarioRepo;
+    private final JdbcTemplate jdbcTemplate;
 
     @GetMapping
     public ResponseEntity<?> listar(Authentication auth) {
@@ -151,6 +154,46 @@ public class SolicitudController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    @PutMapping("/{id}/seguro/aumentar")
+    public ResponseEntity<?> aumentarSeguro(@PathVariable Integer id, @RequestBody Map<String, BigDecimal> body, Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        Integer userId = usuarioRepo.findByEmail(auth.getName())
+                .map(u -> u.getIdentificador())
+                .orElse(null);
+        if (userId == null) return ResponseEntity.status(404).build();
+
+        BigDecimal nuevoImporte = body.get("nuevoImporte");
+        if (nuevoImporte == null || nuevoImporte.compareTo(BigDecimal.ZERO) <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Importe de póliza inválido"));
+        }
+
+        var producto = solicitudRepo.findById(id).orElse(null);
+        if (producto == null) return ResponseEntity.notFound().build();
+        if (!producto.getCliente().equals(userId)) {
+            return ResponseEntity.status(403).body(Map.of("error", "No autorizado"));
+        }
+
+        // Buscar el número de póliza
+        String sqlGetPoliza = "SELECT seguro FROM productos WHERE identificador = ?";
+        try {
+            String nroPoliza = jdbcTemplate.queryForObject(sqlGetPoliza, String.class, id);
+            if (nroPoliza == null || nroPoliza.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Este artículo no posee una póliza de seguro contratada todavía."));
+            }
+
+            // Actualizar importe en seguros
+            String sqlUpdateSeguro = "UPDATE seguros SET importe = ? WHERE nropoliza = ?";
+            int updated = jdbcTemplate.update(sqlUpdateSeguro, nuevoImporte, nroPoliza);
+            if (updated == 0) {
+                return ResponseEntity.badRequest().body(Map.of("error", "No se encontró el registro de seguro correspondiente."));
+            }
+
+            return ResponseEntity.ok(Map.of("mensaje", "Valor de la póliza aumentado correctamente a $" + nuevoImporte));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Error al modificar la póliza: " + e.getMessage()));
+        }
+    }
+
     private Map<String, Object> toMap(SolicitudItem s) {
         var map = new java.util.HashMap<String, Object>();
         map.put("id", s.getIdentificador());
@@ -164,6 +207,38 @@ public class SolicitudController {
         map.put("motivoRechazo", s.getMotivoRechazo() != null ? s.getMotivoRechazo() : "");
         map.put("fechaSolicitud", s.getFechaSolicitud() != null ? s.getFechaSolicitud().toString() : "");
         map.put("archivoComprobante", s.getArchivoComprobante() != null ? s.getArchivoComprobante() : "");
+
+        // Consultar ubicación en depósito si está disponible
+        String ubicacion = "No asignada (en espera de recepción)";
+        try {
+            var listUbi = jdbcTemplate.queryForList(
+                "SELECT d.nombre, d.direccion, pu.ubicacion_detalle FROM productos_ubicacion pu JOIN depositos d ON pu.deposito = d.identificador WHERE pu.producto = ?",
+                s.getIdentificador()
+            );
+            if (!listUbi.isEmpty()) {
+                var row = listUbi.get(0);
+                ubicacion = row.get("nombre") + " — " + row.get("direccion") + " (" + row.get("ubicacion_detalle") + ")";
+            }
+        } catch (Exception ignored) {}
+        map.put("ubicacion", ubicacion);
+
+        // Consultar seguro si está disponible
+        Map<String, Object> seguroMap = null;
+        try {
+            var listSeg = jdbcTemplate.queryForList(
+                "SELECT s.nropoliza, s.compania, s.importe FROM productos p JOIN seguros s ON p.seguro = s.nropoliza WHERE p.identificador = ?",
+                s.getIdentificador()
+            );
+            if (!listSeg.isEmpty()) {
+                var row = listSeg.get(0);
+                seguroMap = new HashMap<>();
+                seguroMap.put("nropoliza", row.get("nropoliza"));
+                seguroMap.put("compania", row.get("compania"));
+                seguroMap.put("importe", row.get("importe"));
+            }
+        } catch (Exception ignored) {}
+        map.put("seguro", seguroMap);
+
         return map;
     }
 }
