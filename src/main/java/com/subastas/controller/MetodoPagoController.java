@@ -33,24 +33,29 @@ public class MetodoPagoController {
 
     @GetMapping
     public ResponseEntity<?> listar(Authentication auth) {
-        Integer clienteId = getClienteId(auth);
-        if (clienteId == null) return ResponseEntity.status(403).build();
+        try {
+            Integer clienteId = getClienteId(auth);
+            if (clienteId == null) return ResponseEntity.status(403).build();
 
-        var pagos = pagoRepo.findByClienteAndActivo(clienteId, "si").stream()
-                .map(p -> {
-                    Map<String, Object> m = new HashMap<>();
-                    m.put("id", p.getIdentificador());
-                    m.put("tipo", p.getTipo());
-                    m.put("detalle", p.getDetalle());
-                    m.put("fechaAlta", p.getFechaAlta().toString());
-                    garantiaRepo.findById(p.getIdentificador())
-                            .ifPresent(g -> m.put("montoGarantia", g.getMontoGarantia()));
-                    verificacionRepo.findByMetodoPagoId(p.getIdentificador())
-                            .ifPresent(v -> m.put("verificado", v.getVerificado()));
-                    return m;
-                })
-                .toList();
-        return ResponseEntity.ok(pagos);
+            var pagos = pagoRepo.findByClienteAndActivo(clienteId, "si").stream()
+                    .map(p -> {
+                        Map<String, Object> m = new HashMap<>();
+                        m.put("id", p.getIdentificador());
+                        m.put("tipo", p.getTipo());
+                        m.put("detalle", p.getDetalle());
+                        m.put("fechaAlta", p.getFechaAlta().toString());
+                        garantiaRepo.findById(p.getIdentificador())
+                                .ifPresent(g -> m.put("montoGarantia", g.getMontoGarantia()));
+                        verificacionRepo.findByMetodoPagoId(p.getIdentificador())
+                                .ifPresent(v -> m.put("verificado", v.getVerificado()));
+                        return m;
+                    })
+                    .toList();
+            return ResponseEntity.ok(pagos);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping
