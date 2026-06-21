@@ -129,11 +129,34 @@ public class AuthController {
         rp.setFotoDniFrente(fotoFrente);
         rp.setFotoDniDorso(fotoDorso);
         rp.setRol(req.rol());
+
+        // Generar código de validación automáticamente
+        java.util.Random random = new java.util.Random();
+        String codigo = String.format("%06d", random.nextInt(1000000));
+        rp.setCodigoCompletar(codigo);
+        rp.setCodigoExpiracion(java.time.LocalDateTime.now().plusHours(48));
+
         rp = registroPendienteRepo.save(rp);
 
+        // Enviar mail inmediatamente
+        try {
+            SimpleMailMessage msg = new SimpleMailMessage();
+            msg.setTo(rp.getEmail());
+            msg.setSubject("Completá tu registro — Subastas");
+            msg.setText(
+                "Hola " + rp.getNombre() + ",\n\n" +
+                "Tu solicitud fue recibida. Usá el siguiente código para verificar tu cuenta y completar tu registro:\n\n" +
+                "Código: " + codigo + "\n\n" +
+                "El código expira en 48 horas.\n\n" +
+                "Equipo Subastas"
+            );
+            mailSender.send(msg);
+        } catch (Exception ignored) {}
+
         return ResponseEntity.status(201).body(Map.of(
-            "mensaje", "Preregistro exitoso. Un administrador revisará tus datos.",
-            "preRegistroId", rp.getIdentificador()
+            "mensaje", "Preregistro exitoso. Código de validación generado y enviado.",
+            "preRegistroId", rp.getIdentificador(),
+            "codigo", codigo
         ));
     }
 
