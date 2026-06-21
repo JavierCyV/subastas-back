@@ -14,6 +14,6 @@ public class MetodoPagoGarantia {
     @Column(name = "metodopago_id")
     private Integer metodoPagoId;
 
-    @Column(nullable = false)
+    @Column(name = "monto_garantia", nullable = false)
     private BigDecimal montoGarantia;
 }
