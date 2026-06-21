@@ -76,6 +76,11 @@ public class MetodoPagoController {
             garantiaRepo.save(g);
         }
 
+        com.subastas.entity.MetodoPagoVerificacion v = new com.subastas.entity.MetodoPagoVerificacion();
+        v.setMetodoPagoId(pago.getIdentificador());
+        v.setVerificado("no");
+        verificacionRepo.save(v);
+
         Map<String, Object> resp = new HashMap<>();
         resp.put("id", pago.getIdentificador());
         resp.put("tipo", pago.getTipo());
