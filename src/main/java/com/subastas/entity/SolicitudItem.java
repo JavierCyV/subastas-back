@@ -66,4 +66,7 @@ public class SolicitudItem {
     // revisor e duenio se asignan cuando el admin acepta el bien
     private Integer revisor;
     private Integer duenio;
+
+    @Column(length = 30)
+    private String seguro;
 }

@@ -21,10 +21,9 @@ if ($jdk) {
 
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
-# Buscar Maven en la carpeta de subastas_back o wrapper
+# Buscar Maven en la carpeta de subastas_back
 $mvn = "C:\subastas_back\apache-maven-3.9.6\bin\mvn.cmd"
 if (-not (Test-Path $mvn)) {
-    # Intento fallback por si acaso
     $mvn = "mvn"
 }
 
