@@ -19,6 +19,9 @@ import com.subastas.repository.SubastaMonedaRepository;
 import com.subastas.repository.SubastaRepository;
 import com.subastas.repository.UsuarioRepository;
 import com.subastas.repository.VictoriaPagoRepository;
+import com.subastas.repository.FacturaRepository;
+import com.subastas.repository.ItemCatalogoSubitemRepository;
+import com.subastas.entity.Factura;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mail.SimpleMailMessage;
@@ -29,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +61,8 @@ public class SubastaController {
     private final MultaRepository multaRepo;
     private final PujoTimestampRepository pujoTimestampRepo;
     private final CompraEmpresaRepository compraEmpresaRepo;
+    private final FacturaRepository facturaRepo;
+    private final ItemCatalogoSubitemRepository subitemRepo;
     private final JavaMailSender mailSender;
 
     // Mapa para almacenar los temporizadores de las subastas activas (itemId -> deadline)
@@ -72,7 +78,9 @@ public class SubastaController {
     }
 
     @GetMapping
-    public ResponseEntity<?> listar(@RequestParam(required = false) String categoria) {
+    public ResponseEntity<?> listar(@RequestParam(required = false) String categoria,
+                                    Authentication auth) {
+        boolean esRegistrado = auth != null;
         var hoy = java.time.LocalDate.now();
         var estados = List.of("abierta", "cerrada");
         var categoriaNormalizada = categoria != null ? categoria.trim() : null;
@@ -113,15 +121,17 @@ public class SubastaController {
             }
             map.put("tipo", tipo);
 
-            // Catalogo info
+            // Catalogo info (item 24: precio base solo para registrados)
             catalogoRepo.findBySubasta(s.getIdentificador()).ifPresent(cat -> {
                 map.put("descripcion", cat.getDescripcion());
-                var items = itemCatalogoRepo.findByCatalogo(cat.getIdentificador());
-                map.put("totalItems", items.size());
-                items.stream()
-                    .map(i -> i.getPreciobase())
-                    .min(BigDecimal::compareTo)
-                    .ifPresent(min -> map.put("precioBaseMinimo", min));
+                if (esRegistrado) {
+                    var items = itemCatalogoRepo.findByCatalogo(cat.getIdentificador());
+                    map.put("totalItems", items.size());
+                    items.stream()
+                        .map(i -> i.getPreciobase())
+                        .min(BigDecimal::compareTo)
+                        .ifPresent(min -> map.put("precioBaseMinimo", min));
+                }
             });
 
             if (!map.containsKey("descripcion"))    map.put("descripcion",    "");
@@ -154,18 +164,32 @@ public class SubastaController {
     }
 
     @GetMapping("/{id}/catalogo")
-    public ResponseEntity<?> catalogo(@PathVariable Integer id) {
+    public ResponseEntity<?> catalogo(@PathVariable Integer id, Authentication auth) {
+        boolean esRegistrado = auth != null;
         var cat = catalogoRepo.findBySubasta(id).orElse(null);
         if (cat == null) return ResponseEntity.ok(List.of());
 
         var items = itemCatalogoRepo.findByCatalogo(cat.getIdentificador()).stream()
-            .map(i -> Map.<String, Object>of(
-                "id",         i.getIdentificador(),
-                "producto",   i.getProducto(),
-                "precioBase", i.getPreciobase(),
-                "comision",   i.getComision(),
-                "subastado",  i.getSubastado() != null ? i.getSubastado() : "no"
-            ))
+            .map(i -> {
+                var m = new HashMap<String, Object>();
+                m.put("id",         i.getIdentificador());
+                m.put("producto",   i.getProducto());
+                m.put("comision",   i.getComision());
+                m.put("subastado",  i.getSubastado() != null ? i.getSubastado() : "no");
+                if (esRegistrado) {
+                    m.put("precioBase", i.getPreciobase());
+                }
+                // Item 26: Sub-items
+                var subitems = subitemRepo.findByItemCatalogo(i.getIdentificador()).stream()
+                    .map(si -> Map.<String, Object>of(
+                        "id", si.getIdentificador(),
+                        "descripcion", si.getDescripcion(),
+                        "cantidad", si.getCantidad()
+                    ))
+                    .toList();
+                m.put("subitems", subitems);
+                return m;
+            })
             .toList();
 
         var result = new HashMap<String, Object>();
@@ -616,17 +640,13 @@ public class SubastaController {
     }
 
     private void finalizarItem(com.subastas.entity.ItemCatalogo item, Integer subastaId) {
-        // 1. Marcar el item como subastado
         item.setSubastado("si");
         itemCatalogoRepo.save(item);
 
-        // 2. Buscar la oferta ganadora
         Pujo pujoGanador = pujoRepo.findGanadorByItem(item.getIdentificador()).orElse(null);
-
         com.subastas.entity.SolicitudItem producto = solicitudRepo.findById(item.getProducto()).orElse(null);
 
         if (pujoGanador == null) {
-            // 2b. Nadie pujó: la empresa compra al precio base
             if (producto != null) {
                 com.subastas.entity.CompraEmpresa ce = new com.subastas.entity.CompraEmpresa();
                 ce.setSubasta(subastaId);
@@ -634,23 +654,23 @@ public class SubastaController {
                 ce.setItem(item.getIdentificador());
                 ce.setImporte(item.getPreciobase());
                 compraEmpresaRepo.save(ce);
-
                 producto.setDisponible("no");
                 solicitudRepo.save(producto);
             }
             return;
         }
         Asistente asistente = asistenteRepo.findById(pujoGanador.getAsistente()).orElse(null);
-
         if (producto == null || asistente == null) return;
 
-        // 3. Crear el registro de venta solo si hay duenio (vendedor)
+        String moneda = subastaMonedaRepo.findBySubastaId(subastaId)
+                .map(sm -> sm.getMoneda()).orElse("ARS");
+        String titulo = producto.getTitulo() != null ? producto.getTitulo() : "artículo";
+
         if (producto.getDuenio() != null) {
             BigDecimal comisionPorcentaje = item.getComision() != null ? item.getComision() : BigDecimal.ZERO;
             BigDecimal comisionPagada = pujoGanador.getImporte()
                     .multiply(comisionPorcentaje)
-                    .divide(new BigDecimal("100"), 2, java.math.RoundingMode.HALF_UP);
-            // Cumplir constraint: comision > 0.01
+                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
             if (comisionPagada.compareTo(new BigDecimal("0.01")) < 0) {
                 comisionPagada = new BigDecimal("0.01");
             }
@@ -664,7 +684,6 @@ public class SubastaController {
             reg.setComision(comisionPagada);
             com.subastas.entity.RegistroDeSubasta savedReg = registroRepo.save(reg);
 
-            // 3b. Crear VictoriaPago para el comprador
             com.subastas.entity.VictoriaPago vp = new com.subastas.entity.VictoriaPago();
             vp.setRegistro(savedReg.getIdentificador());
             vp.setCliente(asistente.getCliente());
@@ -672,32 +691,88 @@ public class SubastaController {
             vp.setFechavictoria(java.time.LocalDateTime.now());
             vp.setPagado("no");
             victoriaRepo.save(vp);
+
+            // Item 17: Generar factura automáticamente
+            Factura factura = new Factura();
+            factura.setRegistro(savedReg.getIdentificador());
+            factura.setCliente(asistente.getCliente());
+            factura.setImportePujado(pujoGanador.getImporte());
+            factura.setComision(comisionPagada);
+            factura.setCostoEnvio(BigDecimal.ZERO);
+            factura.setTotal(pujoGanador.getImporte().add(comisionPagada));
+            factura.setConSeguro("si");
+            facturaRepo.save(factura);
         }
 
-        // 4. Marcar producto como no disponible
         producto.setDisponible("no");
         solicitudRepo.save(producto);
 
-        // 5. Notificar al ganador por email
+        // Item 25: Email con detalle completo
         try {
             usuarioRepo.findById(asistente.getCliente()).ifPresent(u -> {
-                String titulo = producto.getTitulo() != null ? producto.getTitulo() : "artículo";
+                var subasta = subastaRepo.findById(subastaId).orElse(null);
+                String fechaSubasta = subasta != null && subasta.getFecha() != null ? subasta.getFecha().toString() : "";
+                String categoria = subasta != null && subasta.getCategoria() != null ? subasta.getCategoria() : "";
+
                 SimpleMailMessage msg = new SimpleMailMessage();
                 msg.setTo(u.getEmail());
                 msg.setSubject("¡Ganaste la subasta! — Subastas");
                 msg.setText(
-                    "¡Felicitaciones! Ganaste el artículo \"" + titulo + "\".\n\n" +
-                    "Importe final: $" + pujoGanador.getImporte() + "\n" +
-                    "Subasta #" + subastaId + "\n\n" +
-                    "Te contactaremos para coordinar la entrega y el pago.\n\n" +
-                    "Importante: tenés 72 horas para presentar los fondos. " +
-                    "En caso de no hacerlo, se aplicará una multa del 10% del importe ganado."
+                    "¡Felicitaciones! Ganaste el artículo en la subasta.\n\n" +
+                    "--- DETALLE DE LA COMPRA ---\n" +
+                    "Artículo: " + titulo + "\n" +
+                    "Importe final: " + moneda + " " + pujoGanador.getImporte() + "\n" +
+                    "Subasta #" + subastaId + "\n" +
+                    "Fecha: " + fechaSubasta + "\n" +
+                    "Categoría: " + categoria + "\n\n" +
+                    "--- PRÓXIMOS PASOS ---\n" +
+                    "1. Tenés 72 horas para presentar los fondos mediante tu método de pago.\n" +
+                    "2. En caso de no hacerlo, se aplicará una multa del 10% del importe ganado.\n" +
+                    "3. Una vez acreditado el pago, coordinaremos la entrega del artículo.\n" +
+                    "4. Podés optar por envío a domicilio o retiro personal.\n\n" +
+                    "Ante cualquier consulta, respondé este correo.\n\n" +
+                    "Equipo Subastas"
                 );
                 mailSender.send(msg);
             });
-        } catch (Exception ignored) {
-            // No interrumpir el cierre del item por un fallo de email
-        }
+        } catch (Exception ignored) {}
+    }
+
+    // ── SUB-ITEMS (Item 26) ──────────────────────────────────────────────────
+
+    record SubitemRequest(String descripcion, Integer cantidad) {}
+
+    @PostMapping("/items/{itemId}/subitems")
+    @Transactional
+    public ResponseEntity<?> agregarSubitem(@PathVariable Integer itemId,
+                                             @RequestBody SubitemRequest req,
+                                             Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        var item = itemCatalogoRepo.findById(itemId).orElse(null);
+        if (item == null) return ResponseEntity.notFound().build();
+        if (req.descripcion() == null || req.descripcion().isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "Descripción requerida"));
+
+        var si = new com.subastas.entity.ItemCatalogoSubitem();
+        si.setItemCatalogo(itemId);
+        si.setDescripcion(req.descripcion());
+        si.setCantidad(req.cantidad() != null ? req.cantidad() : 1);
+        subitemRepo.save(si);
+
+        return ResponseEntity.status(201).body(Map.of(
+            "id", si.getIdentificador(),
+            "descripcion", si.getDescripcion(),
+            "cantidad", si.getCantidad()
+        ));
+    }
+
+    @DeleteMapping("/items/subitems/{subitemId}")
+    public ResponseEntity<?> eliminarSubitem(@PathVariable Integer subitemId, Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        return subitemRepo.findById(subitemId).map(si -> {
+            subitemRepo.delete(si);
+            return ResponseEntity.ok(Map.of("mensaje", "Sub-item eliminado"));
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     @Scheduled(fixedDelay = 30000)

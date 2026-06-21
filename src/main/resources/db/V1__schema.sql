@@ -21,6 +21,16 @@ DROP TABLE IF EXISTS metodospago_garantia      CASCADE;
 DROP TABLE IF EXISTS subastas_moneda           CASCADE;
 DROP TABLE IF EXISTS pujos_timestamp           CASCADE;
 DROP TABLE IF EXISTS victoriaspago             CASCADE;
+DROP TABLE IF EXISTS itemscatalogo_subitems    CASCADE;
+DROP TABLE IF EXISTS productos_origen          CASCADE;
+DROP TABLE IF EXISTS duenios_cuenta            CASCADE;
+DROP TABLE IF EXISTS devoluciones              CASCADE;
+DROP TABLE IF EXISTS facturas                  CASCADE;
+DROP TABLE IF EXISTS productos_artista         CASCADE;
+DROP TABLE IF EXISTS productos_ubicacion       CASCADE;
+DROP TABLE IF EXISTS depositos                 CASCADE;
+DROP TABLE IF EXISTS registros_pendientes      CASCADE;
+DROP TABLE IF EXISTS personas_dni              CASCADE;
 DROP TABLE IF EXISTS multas                    CASCADE;
 DROP TABLE IF EXISTS metodosdepago             CASCADE;
 DROP TABLE IF EXISTS usuarios                  CASCADE;
@@ -229,6 +239,104 @@ CREATE TABLE metodosdepago (
 -- PASO 2b: TABLAS NUEVAS (multas, victorias, timestamps, moneda, etc.)
 -- ----------------------------------------------------------------
 
+CREATE TABLE IF NOT EXISTS personas_dni (
+    persona_id INT NOT NULL,
+    foto_frente VARCHAR(500),
+    foto_dorso VARCHAR(500),
+    CONSTRAINT pk_personas_dni PRIMARY KEY (persona_id)
+);
+
+CREATE TABLE IF NOT EXISTS registros_pendientes (
+    identificador SERIAL NOT NULL,
+    email VARCHAR(150) NOT NULL,
+    nombre VARCHAR(150) NOT NULL,
+    documento VARCHAR(20) NOT NULL,
+    direccion VARCHAR(250),
+    telefono VARCHAR(50),
+    pais INT,
+    foto_dni_frente VARCHAR(500),
+    foto_dni_dorso VARCHAR(500),
+    rol VARCHAR(20) NOT NULL,
+    codigo_completar VARCHAR(6),
+    codigo_expiracion TIMESTAMP,
+    creado TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT pk_registros_pendientes PRIMARY KEY (identificador)
+);
+
+CREATE TABLE IF NOT EXISTS depositos (
+    identificador SERIAL NOT NULL,
+    nombre VARCHAR(150) NOT NULL,
+    direccion VARCHAR(250),
+    CONSTRAINT pk_depositos PRIMARY KEY (identificador)
+);
+
+CREATE TABLE IF NOT EXISTS productos_ubicacion (
+    producto INT NOT NULL,
+    deposito INT NOT NULL,
+    ubicacion_detalle VARCHAR(500),
+    CONSTRAINT pk_productos_ubicacion PRIMARY KEY (producto)
+);
+
+CREATE TABLE IF NOT EXISTS productos_artista (
+    producto INT NOT NULL,
+    artista VARCHAR(200),
+    fecha_obra DATE,
+    historia TEXT,
+    duenios_anteriores TEXT,
+    CONSTRAINT pk_productos_artista PRIMARY KEY (producto)
+);
+
+CREATE TABLE IF NOT EXISTS facturas (
+    identificador SERIAL NOT NULL,
+    registro INT NOT NULL,
+    cliente INT NOT NULL,
+    importe_pujado DECIMAL(18,2) NOT NULL,
+    comision DECIMAL(18,2) NOT NULL,
+    costo_envio DECIMAL(18,2) DEFAULT 0,
+    total DECIMAL(18,2) NOT NULL,
+    tipo_entrega VARCHAR(20) CONSTRAINT chkfe CHECK (tipo_entrega IN ('envio','retiro_personal')),
+    direccion_envio VARCHAR(250),
+    con_seguro VARCHAR(2) DEFAULT 'si' CONSTRAINT chkfcs CHECK (con_seguro IN ('si','no')),
+    emitida TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT pk_facturas PRIMARY KEY (identificador)
+);
+
+CREATE TABLE IF NOT EXISTS devoluciones (
+    identificador SERIAL NOT NULL,
+    producto INT NOT NULL,
+    motivo VARCHAR(1000) NOT NULL,
+    cargo DECIMAL(18,2),
+    fecha TIMESTAMP DEFAULT NOW(),
+    estado VARCHAR(20) DEFAULT 'pendiente',
+    CONSTRAINT pk_devoluciones PRIMARY KEY (identificador)
+);
+
+CREATE TABLE IF NOT EXISTS duenios_cuenta (
+    duenio INT NOT NULL,
+    banco VARCHAR(200),
+    tipo_cuenta VARCHAR(50),
+    numero_cuenta VARCHAR(100),
+    moneda VARCHAR(3) DEFAULT 'ARS',
+    es_exterior VARCHAR(2) DEFAULT 'no' CONSTRAINT chkdc CHECK (es_exterior IN ('si','no')),
+    CONSTRAINT pk_duenios_cuenta PRIMARY KEY (duenio)
+);
+
+CREATE TABLE IF NOT EXISTS productos_origen (
+    producto INT NOT NULL,
+    tipo_documento VARCHAR(100),
+    archivo VARCHAR(500),
+    verificado VARCHAR(2) DEFAULT 'no' CONSTRAINT chkpo CHECK (verificado IN ('si','no')),
+    CONSTRAINT pk_productos_origen PRIMARY KEY (producto)
+);
+
+CREATE TABLE IF NOT EXISTS itemscatalogo_subitems (
+    identificador SERIAL NOT NULL,
+    item_catalogo INT NOT NULL,
+    descripcion VARCHAR(300) NOT NULL,
+    cantidad INT DEFAULT 1,
+    CONSTRAINT pk_itemscatalogo_subitems PRIMARY KEY (identificador)
+);
+
 CREATE TABLE IF NOT EXISTS multas (
     identificador SERIAL NOT NULL,
     registro INT REFERENCES registrodesubasta(identificador),
@@ -328,6 +436,17 @@ ALTER TABLE registrodesubasta ADD CONSTRAINT fk_registrodesubasta_clientes  FORE
 ALTER TABLE usuarios        ADD CONSTRAINT fk_usuarios_personas         FOREIGN KEY (identificador)     REFERENCES personas  (identificador);
 
 ALTER TABLE metodosdepago   ADD CONSTRAINT fk_metodosdepago_clientes    FOREIGN KEY (cliente)           REFERENCES clientes  (identificador);
+
+ALTER TABLE personas_dni            ADD CONSTRAINT fk_pd_personas          FOREIGN KEY (persona_id)  REFERENCES personas  (identificador);
+ALTER TABLE productos_ubicacion     ADD CONSTRAINT fk_pu_productos         FOREIGN KEY (producto)   REFERENCES productos (identificador);
+ALTER TABLE productos_ubicacion     ADD CONSTRAINT fk_pu_depositos         FOREIGN KEY (deposito)   REFERENCES depositos (identificador);
+ALTER TABLE productos_artista       ADD CONSTRAINT fk_pa_productos         FOREIGN KEY (producto)   REFERENCES productos (identificador);
+ALTER TABLE facturas                ADD CONSTRAINT fk_fact_registro        FOREIGN KEY (registro)   REFERENCES registrodesubasta (identificador);
+ALTER TABLE facturas                ADD CONSTRAINT fk_fact_cliente         FOREIGN KEY (cliente)    REFERENCES clientes (identificador);
+ALTER TABLE devoluciones            ADD CONSTRAINT fk_dev_productos        FOREIGN KEY (producto)   REFERENCES productos (identificador);
+ALTER TABLE duenios_cuenta          ADD CONSTRAINT fk_dc_duenios           FOREIGN KEY (duenio)     REFERENCES duenios (identificador);
+ALTER TABLE productos_origen        ADD CONSTRAINT fk_po_productos         FOREIGN KEY (producto)   REFERENCES productos (identificador);
+ALTER TABLE itemscatalogo_subitems  ADD CONSTRAINT fk_ics_itemscatalogo   FOREIGN KEY (item_catalogo) REFERENCES itemscatalogo (identificador);
 
 -- ----------------------------------------------------------------
 -- PASO 4: TRIGGER para validar fecha de subasta

@@ -1,14 +1,15 @@
 package com.subastas.controller;
 
-import com.subastas.entity.SolicitudItem;
-import com.subastas.repository.SolicitudItemRepository;
-import com.subastas.repository.UsuarioRepository;
+import com.subastas.entity.*;
+import com.subastas.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.Map;
 
 @RestController
@@ -18,6 +19,8 @@ public class SolicitudController {
 
     private final SolicitudItemRepository solicitudRepo;
     private final UsuarioRepository usuarioRepo;
+    private final ProductoArtistaRepository artistaRepo;
+    private final ProductoOrigenRepository origenRepo;
 
     @GetMapping
     public ResponseEntity<?> listar(Authentication auth) {
@@ -42,7 +45,15 @@ public class SolicitudController {
         BigDecimal precioBaseSugerido,
         String archivoComprobante,
         boolean declaracionJurada,
-        java.util.List<String> fotosBase64
+        java.util.List<String> fotosBase64,
+        // Item 16: Datos artista/obra
+        String artista,
+        String fechaObra,
+        String historia,
+        String dueniosAnteriores,
+        // Item 22: Origen lícito
+        String tipoDocumentoOrigen,
+        String archivoOrigenBase64
     ) {}
 
     @PostMapping
@@ -67,7 +78,6 @@ public class SolicitudController {
             return ResponseEntity.badRequest().body(Map.of("error", "Debe subir exactamente entre 5 y 6 fotos del artículo."));
         }
 
-        // Procesar fotos Base64
         String urls = "";
         if (!validFotos.isEmpty()) {
             java.util.List<String> savedUrls = new java.util.ArrayList<>();
@@ -103,10 +113,65 @@ public class SolicitudController {
         s.setArchivoComprobante(urls.isEmpty() ? req.archivoComprobante() : urls);
         s.setDeclaracionJurada(req.declaracionJurada() ? "si" : "no");
         s.setEstado("pendiente");
+        s = solicitudRepo.save(s);
 
-        solicitudRepo.save(s);
+        // Item 16: Guardar datos de artista/obra
+        if (req.artista() != null && !req.artista().isBlank()) {
+            ProductoArtista pa = new ProductoArtista();
+            pa.setProducto(s.getIdentificador());
+            pa.setArtista(req.artista());
+            if (req.fechaObra() != null && !req.fechaObra().isBlank()) {
+                try {
+                    pa.setFechaObra(LocalDate.parse(req.fechaObra()));
+                } catch (Exception ignored) {}
+            }
+            pa.setHistoria(req.historia());
+            pa.setDueniosAnteriores(req.dueniosAnteriores());
+            artistaRepo.save(pa);
+        }
+
+        // Item 22: Guardar documento de origen lícito
+        String archivoOrigenUrl = null;
+        if (req.archivoOrigenBase64() != null && !req.archivoOrigenBase64().isBlank()) {
+            try {
+                String payload = req.archivoOrigenBase64().contains(",") ? req.archivoOrigenBase64().split(",")[1] : req.archivoOrigenBase64();
+                byte[] bytes = java.util.Base64.getDecoder().decode(payload.trim());
+                String filename = "origen_" + java.util.UUID.randomUUID() + ".pdf";
+                java.nio.file.Files.write(java.nio.file.Paths.get("uploads", filename), bytes);
+                archivoOrigenUrl = "/uploads/" + filename;
+            } catch (Exception ignored) {}
+        }
+        if ((req.tipoDocumentoOrigen() != null && !req.tipoDocumentoOrigen().isBlank()) || archivoOrigenUrl != null) {
+            ProductoOrigen po = new ProductoOrigen();
+            po.setProducto(s.getIdentificador());
+            po.setTipoDocumento(req.tipoDocumentoOrigen());
+            po.setArchivo(archivoOrigenUrl);
+            po.setVerificado("no");
+            origenRepo.save(po);
+        }
 
         return ResponseEntity.status(201).body(toMap(s));
+    }
+
+    // Item 16 + 22: Ver datos extras de una solicitud
+    @GetMapping("/{id}/detalle")
+    public ResponseEntity<?> detalle(@PathVariable Integer id, Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        return solicitudRepo.findById(id).map(s -> {
+            var result = new HashMap<>(toMap(s));
+            artistaRepo.findByProducto(id).ifPresent(a -> {
+                result.put("artista", a.getArtista());
+                result.put("fechaObra", a.getFechaObra() != null ? a.getFechaObra().toString() : "");
+                result.put("historia", a.getHistoria() != null ? a.getHistoria() : "");
+                result.put("dueniosAnteriores", a.getDueniosAnteriores() != null ? a.getDueniosAnteriores() : "");
+            });
+            origenRepo.findByProducto(id).ifPresent(o -> {
+                result.put("tipoDocumentoOrigen", o.getTipoDocumento() != null ? o.getTipoDocumento() : "");
+                result.put("archivoOrigen", o.getArchivo() != null ? o.getArchivo() : "");
+                result.put("origenVerificado", o.getVerificado());
+            });
+            return ResponseEntity.ok(result);
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     // Usuario acepta el precio base y comisión propuesto por la empresa
@@ -152,7 +217,7 @@ public class SolicitudController {
     }
 
     private Map<String, Object> toMap(SolicitudItem s) {
-        var map = new java.util.HashMap<String, Object>();
+        var map = new HashMap<String, Object>();
         map.put("id", s.getIdentificador());
         map.put("titulo", s.getTitulo());
         map.put("categoria", s.getCategoria() != null ? s.getCategoria() : "");

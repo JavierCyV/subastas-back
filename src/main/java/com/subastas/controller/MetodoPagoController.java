@@ -22,7 +22,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class MetodoPagoController {
 
-    private static final List<String> TIPOS_VALIDOS = List.of("transferencia", "cheque", "efectivo");
+    private static final List<String> TIPOS_VALIDOS = List.of("transferencia", "cheque", "efectivo", "tarjeta");
 
     private final MetodoPagoRepository pagoRepo;
     private final MetodoPagoGarantiaRepository garantiaRepo;
@@ -60,7 +60,7 @@ public class MetodoPagoController {
 
         if (!TIPOS_VALIDOS.contains(req.tipo())) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Tipo inválido. Usar: transferencia, cheque o efectivo"));
+                    .body(Map.of("error", "Tipo inválido. Usar: transferencia, cheque, efectivo o tarjeta"));
         }
 
         MetodoPago pago = new MetodoPago();

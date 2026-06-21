@@ -14,7 +14,9 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.security.SecureRandom;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
@@ -34,7 +36,11 @@ public class AdminController {
     private final SubastaMonedaRepository subastaMonedaRepo;
     private final MetodoPagoRepository metodoPagoRepo;
     private final MetodoPagoVerificacionRepository metodoPagoVerificacionRepo;
+    private final RegistroPendienteRepository registroPendienteRepo;
+    private final ProductoOrigenRepository productoOrigenRepo;
+    private final DevolucionRepository devolucionRepo;
     private final JavaMailSender mailSender;
+    private static final SecureRandom RNG = new SecureRandom();
 
     // ── USUARIOS PENDIENTES ────────────────────────────────────────────────────
 
@@ -246,6 +252,132 @@ public class AdminController {
             v.setVerificado("si");
             metodoPagoVerificacionRepo.save(v);
             return ResponseEntity.ok(Map.of("mensaje", "Método de pago verificado"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // ── REGISTROS PENDIENTES (Item 12: 2 etapas) ─────────────────────────────
+
+    @GetMapping("/registros/pendientes")
+    public ResponseEntity<?> registrosPendientes() {
+        var lista = registroPendienteRepo.findByCodigoCompletarIsNull().stream()
+                .map(r -> Map.<String, Object>of(
+                        "id", r.getIdentificador(),
+                        "email", r.getEmail(),
+                        "nombre", r.getNombre(),
+                        "documento", r.getDocumento(),
+                        "rol", r.getRol(),
+                        "fotoDniFrente", r.getFotoDniFrente() != null ? r.getFotoDniFrente() : "",
+                        "fotoDniDorso", r.getFotoDniDorso() != null ? r.getFotoDniDorso() : "",
+                        "creado", r.getCreado() != null ? r.getCreado().toString() : ""
+                ))
+                .toList();
+        return ResponseEntity.ok(lista);
+    }
+
+    @PostMapping("/registros/{id}/enviar-codigo")
+    public ResponseEntity<?> enviarCodigo(@PathVariable Integer id) {
+        return registroPendienteRepo.findById(id).map(r -> {
+            String codigo = String.format("%06d", RNG.nextInt(1000000));
+            r.setCodigoCompletar(codigo);
+            r.setCodigoExpiracion(LocalDateTime.now().plusHours(48));
+            registroPendienteRepo.save(r);
+
+            try {
+                SimpleMailMessage msg = new SimpleMailMessage();
+                msg.setTo(r.getEmail());
+                msg.setSubject("Completá tu registro — Subastas");
+                msg.setText(
+                    "Hola " + r.getNombre() + ",\n\n" +
+                    "Tu preregistro fue aprobado. Usá el siguiente código para completar tu registro:\n\n" +
+                    "Código: " + codigo + "\n\n" +
+                    "El código expira en 48 horas.\n\n" +
+                    "Ingresá a la app y usá la opción 'Completar registro' con tu email y este código.\n\n" +
+                    "Equipo Subastas"
+                );
+                mailSender.send(msg);
+            } catch (Exception ignored) {}
+
+            return ResponseEntity.ok(Map.of("mensaje", "Código enviado al email del usuario"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/registros/{id}")
+    public ResponseEntity<?> rechazarPreRegistro(@PathVariable Integer id) {
+        return registroPendienteRepo.findById(id).map(r -> {
+            registroPendienteRepo.delete(r);
+            return ResponseEntity.ok(Map.of("mensaje", "Preregistro rechazado y eliminado"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // ── VERIFICAR DOCUMENTOS DE ORIGEN (Item 22) ─────────────────────────────
+
+    @GetMapping("/origen")
+    public ResponseEntity<?> listarOrigenPendiente() {
+        var lista = productoOrigenRepo.findAll().stream()
+                .filter(o -> !"si".equals(o.getVerificado()))
+                .map(o -> {
+                    var prod = solicitudRepo.findById(o.getProducto()).orElse(null);
+                    return Map.<String, Object>of(
+                            "producto", o.getProducto(),
+                            "titulo", prod != null && prod.getTitulo() != null ? prod.getTitulo() : "",
+                            "tipoDocumento", o.getTipoDocumento() != null ? o.getTipoDocumento() : "",
+                            "archivo", o.getArchivo() != null ? o.getArchivo() : "",
+                            "verificado", o.getVerificado()
+                    );
+                })
+                .toList();
+        return ResponseEntity.ok(lista);
+    }
+
+    @PutMapping("/origen/{productoId}/verificar")
+    public ResponseEntity<?> verificarOrigen(@PathVariable Integer productoId) {
+        return productoOrigenRepo.findByProducto(productoId).map(o -> {
+            o.setVerificado("si");
+            productoOrigenRepo.save(o);
+            return ResponseEntity.ok(Map.of("mensaje", "Documento de origen verificado"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    // ── DEVOLUCIONES (Item 20) ─────────────────────────────────────────────────
+
+    @GetMapping("/devoluciones")
+    public ResponseEntity<?> listarDevoluciones() {
+        var lista = devolucionRepo.findAll().stream()
+                .map(d -> {
+                    var prod = solicitudRepo.findById(d.getProducto()).orElse(null);
+                    return Map.<String, Object>of(
+                            "id", d.getIdentificador(),
+                            "producto", d.getProducto(),
+                            "titulo", prod != null && prod.getTitulo() != null ? prod.getTitulo() : "",
+                            "motivo", d.getMotivo(),
+                            "cargo", d.getCargo(),
+                            "fecha", d.getFecha() != null ? d.getFecha().toString() : "",
+                            "estado", d.getEstado()
+                    );
+                })
+                .toList();
+        return ResponseEntity.ok(lista);
+    }
+
+    record AprobarDevolucionRequest(BigDecimal cargo) {}
+
+    @PutMapping("/devoluciones/{id}/aprobar")
+    public ResponseEntity<?> aprobarDevolucion(@PathVariable Integer id,
+                                                @RequestBody(required = false) AprobarDevolucionRequest req) {
+        return devolucionRepo.findById(id).map(d -> {
+            d.setEstado("aprobada");
+            if (req != null && req.cargo() != null) d.setCargo(req.cargo());
+            devolucionRepo.save(d);
+            return ResponseEntity.ok(Map.of("mensaje", "Devolución aprobada"));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    @PutMapping("/devoluciones/{id}/rechazar")
+    public ResponseEntity<?> rechazarDevolucion(@PathVariable Integer id) {
+        return devolucionRepo.findById(id).map(d -> {
+            d.setEstado("rechazada");
+            devolucionRepo.save(d);
+            return ResponseEntity.ok(Map.of("mensaje", "Devolución rechazada"));
         }).orElse(ResponseEntity.notFound().build());
     }
 
