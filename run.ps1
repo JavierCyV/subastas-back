@@ -5,20 +5,30 @@ Get-Content "$PSScriptRoot\.env" | ForEach-Object {
     }
 }
 
-# Buscar dinámicamente un JDK instalado en Eclipse Adoptium o Java
-$jdk = Get-ChildItem -Path "C:\Program Files\Eclipse Adoptium", "C:\Program Files\Java" -Filter "jdk-*" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+# Buscar dinámicamente un JDK instalado en Microsoft, Eclipse Adoptium o Java
+$jdkPaths = @(
+    "C:\Program Files\Microsoft",
+    "C:\Program Files\Eclipse Adoptium",
+    "C:\Program Files\Java"
+)
+$jdk = Get-ChildItem -Path $jdkPaths -Filter "jdk-*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($jdk) {
     $env:JAVA_HOME = $jdk.FullName
 } else {
-    # Si no se encuentra, usamos la ruta por defecto esperada para el instalador de Adoptium JDK 25
-    $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-25.0.1.8-hotspot"
+    # Ruta por defecto esperada para el OpenJDK 21 instalado
+    $env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot"
 }
 
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
-# Ruta corregida de Maven para tu usuario actual (Usuario)
-$mvn = "C:\Users\javic\.m2\wrapper\dists\apache-maven-3.9.11\03d7e36a140982eea48e22c1dcac01d8862b2550b2939e09a0809bbc5182a5bc\bin\mvn.cmd"
+# Buscar Maven en la carpeta de subastas_back o wrapper
+$mvn = "C:\subastas_back\apache-maven-3.9.6\bin\mvn.cmd"
+if (-not (Test-Path $mvn)) {
+    # Intento fallback por si acaso
+    $mvn = "mvn"
+}
 
 Set-Location $PSScriptRoot
+Write-Host "Iniciando backend con Java en: $env:JAVA_HOME"
+Write-Host "Usando Maven en: $mvn"
 & $mvn clean spring-boot:run
-
