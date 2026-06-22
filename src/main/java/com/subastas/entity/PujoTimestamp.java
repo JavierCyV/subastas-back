@@ -14,6 +14,6 @@ public class PujoTimestamp {
     @Column(name = "pujo_id")
     private Integer pujoId;
 
-    @Column(nullable = false)
+    @Column(name = "fecha_pujo", nullable = false)
     private LocalDateTime fechaPujo = LocalDateTime.now();
 }
