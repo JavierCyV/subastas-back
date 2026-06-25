@@ -2,6 +2,7 @@ package com.subastas.controller;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Instant;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 public class HealthController {
@@ -39,13 +41,6 @@ public class HealthController {
     @PostConstruct
     public void init() {
         try {
-            crearTablasSiNoExisten();
-        } catch (Exception ignored) {}
-    }
-
-    @GetMapping("/health")
-    public ResponseEntity<Map<String, String>> health() {
-        try {
             jdbcTemplate.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS titulo VARCHAR(200)");
             jdbcTemplate.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS clientesolicitante INT");
             jdbcTemplate.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS estado VARCHAR(25) DEFAULT 'pendiente'");
@@ -58,16 +53,24 @@ public class HealthController {
             jdbcTemplate.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS fechasolicitud TIMESTAMP DEFAULT NOW()");
             jdbcTemplate.execute("ALTER TABLE productos ALTER COLUMN revisor DROP NOT NULL");
             jdbcTemplate.execute("ALTER TABLE productos ALTER COLUMN duenio DROP NOT NULL");
-
             crearTablasSiNoExisten();
+        } catch (Exception e) {
+            log.warn("DB migration on startup failed: {}", e.getMessage());
+        }
+    }
 
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, String>> health() {
+        try {
+            jdbcTemplate.queryForObject("SELECT 1", Integer.class);
             return ResponseEntity.ok(Map.of(
-                    "status", "ok (db patched)",
+                    "status", "ok",
                     "timestamp", Instant.now().toString()
             ));
         } catch (Exception e) {
-            return ResponseEntity.ok(Map.of(
-                    "status", "error patching db: " + e.getMessage(),
+            log.error("Health check failed", e);
+            return ResponseEntity.status(503).body(Map.of(
+                    "status", "error: " + e.getMessage(),
                     "timestamp", Instant.now().toString()
             ));
         }

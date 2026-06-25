@@ -24,12 +24,15 @@ import com.subastas.repository.FacturaRepository;
 import com.subastas.repository.ItemCatalogoSubitemRepository;
 import com.subastas.entity.Factura;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.core.Authentication;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -40,6 +43,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/subastas")
 @RequiredArgsConstructor
@@ -641,7 +645,8 @@ public class SubastaController {
     }
 
     private synchronized void finalizarItem(com.subastas.entity.ItemCatalogo item, Integer subastaId) {
-        if (registroRepo.existsByProducto(item.getProducto())) {
+        // Doble check: estado en memoria y en DB para evitar doble finalización
+        if ("si".equals(item.getSubastado()) || registroRepo.existsByProducto(item.getProducto())) {
             return;
         }
         item.setSubastado("si");
@@ -711,35 +716,45 @@ public class SubastaController {
         producto.setDisponible("no");
         solicitudRepo.save(producto);
 
-        // Item 25: Email con detalle completo
-        try {
-            usuarioRepo.findById(asistente.getCliente()).ifPresent(u -> {
-                var subasta = subastaRepo.findById(subastaId).orElse(null);
-                String fechaSubasta = subasta != null && subasta.getFecha() != null ? subasta.getFecha().toString() : "";
-                String categoria = subasta != null && subasta.getCategoria() != null ? subasta.getCategoria() : "";
+        // Item 25: Email con detalle completo — se envía DESPUÉS del commit para no bloquear la conexión DB
+        usuarioRepo.findById(asistente.getCliente()).ifPresent(u -> {
+            var subasta = subastaRepo.findById(subastaId).orElse(null);
+            String fechaSubasta = subasta != null && subasta.getFecha() != null ? subasta.getFecha().toString() : "";
+            String categoria = subasta != null && subasta.getCategoria() != null ? subasta.getCategoria() : "";
 
-                SimpleMailMessage msg = new SimpleMailMessage();
-                msg.setTo(u.getEmail());
-                msg.setSubject("¡Ganaste la subasta! — Subastas");
-                msg.setText(
-                    "¡Felicitaciones! Ganaste el artículo en la subasta.\n\n" +
-                    "--- DETALLE DE LA COMPRA ---\n" +
-                    "Artículo: " + titulo + "\n" +
-                    "Importe final: " + moneda + " " + pujoGanador.getImporte() + "\n" +
-                    "Subasta #" + subastaId + "\n" +
-                    "Fecha: " + fechaSubasta + "\n" +
-                    "Categoría: " + categoria + "\n\n" +
-                    "--- PRÓXIMOS PASOS ---\n" +
-                    "1. Tenés 72 horas para presentar los fondos mediante tu método de pago.\n" +
-                    "2. En caso de no hacerlo, se aplicará una multa del 10% del importe ganado.\n" +
-                    "3. Una vez acreditado el pago, coordinaremos la entrega del artículo.\n" +
-                    "4. Podés optar por envío a domicilio o retiro personal.\n\n" +
-                    "Ante cualquier consulta, respondé este correo.\n\n" +
-                    "Equipo Subastas"
-                );
-                mailSender.send(msg);
-            });
-        } catch (Exception ignored) {}
+            SimpleMailMessage msg = new SimpleMailMessage();
+            msg.setTo(u.getEmail());
+            msg.setSubject("¡Ganaste la subasta! — Subastas");
+            msg.setText(
+                "¡Felicitaciones! Ganaste el artículo en la subasta.\n\n" +
+                "--- DETALLE DE LA COMPRA ---\n" +
+                "Artículo: " + titulo + "\n" +
+                "Importe final: " + moneda + " " + pujoGanador.getImporte() + "\n" +
+                "Subasta #" + subastaId + "\n" +
+                "Fecha: " + fechaSubasta + "\n" +
+                "Categoría: " + categoria + "\n\n" +
+                "--- PRÓXIMOS PASOS ---\n" +
+                "1. Tenés 72 horas para presentar los fondos mediante tu método de pago.\n" +
+                "2. En caso de no hacerlo, se aplicará una multa del 10% del importe ganado.\n" +
+                "3. Una vez acreditado el pago, coordinaremos la entrega del artículo.\n" +
+                "4. Podés optar por envío a domicilio o retiro personal.\n\n" +
+                "Ante cualquier consulta, respondé este correo.\n\n" +
+                "Equipo Subastas"
+            );
+
+            if (TransactionSynchronizationManager.isActualTransactionActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        try { mailSender.send(msg); }
+                        catch (Exception e) { log.warn("No se pudo enviar email al ganador {}: {}", u.getEmail(), e.getMessage()); }
+                    }
+                });
+            } else {
+                try { mailSender.send(msg); }
+                catch (Exception e) { log.warn("No se pudo enviar email al ganador {}: {}", u.getEmail(), e.getMessage()); }
+            }
+        });
     }
 
     // ── SUB-ITEMS (Item 26) ──────────────────────────────────────────────────
@@ -773,7 +788,17 @@ public class SubastaController {
     @DeleteMapping("/items/subitems/{subitemId}")
     public ResponseEntity<?> eliminarSubitem(@PathVariable Integer subitemId, Authentication auth) {
         if (auth == null) return ResponseEntity.status(401).build();
+        var usuario = usuarioRepo.findByEmail(auth.getName()).orElse(null);
+        if (usuario == null) return ResponseEntity.status(401).build();
+
         return subitemRepo.findById(subitemId).map(si -> {
+            boolean esEmpleado = "empleado".equals(usuario.getRol());
+            if (!esEmpleado) {
+                var item = itemCatalogoRepo.findById(si.getItemCatalogo()).orElse(null);
+                var producto = item != null ? solicitudRepo.findById(item.getProducto()).orElse(null) : null;
+                boolean esDuenio = producto != null && usuario.getIdentificador().equals(producto.getDuenio());
+                if (!esDuenio) return ResponseEntity.status(403).<Object>body(Map.of("error", "No autorizado"));
+            }
             subitemRepo.delete(si);
             return ResponseEntity.ok(Map.of("mensaje", "Sub-item eliminado"));
         }).orElse(ResponseEntity.notFound().build());

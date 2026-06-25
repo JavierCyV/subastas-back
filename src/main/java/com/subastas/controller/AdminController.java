@@ -2,11 +2,11 @@ package com.subastas.controller;
 
 import com.subastas.entity.*;
 import com.subastas.repository.*;
-import com.subastas.service.PasswordResetService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/admin")
 @PreAuthorize("hasRole('EMPLEADO')")
@@ -90,7 +91,7 @@ public class AdminController {
                     "Equipo Subastas"
                 );
                 mailSender.send(msg);
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("No se pudo enviar email de aprobación a {}: {}", u.getEmail(), e.getMessage()); }
 
             return ResponseEntity.ok(Map.of("mensaje", "Usuario aprobado"));
         }).orElse(ResponseEntity.notFound().build());
@@ -124,7 +125,7 @@ public class AdminController {
                     "Equipo Subastas"
                 );
                 mailSender.send(msg);
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("No se pudo enviar email de rechazo a {}: {}", u.getEmail(), e.getMessage()); }
 
             return ResponseEntity.ok(Map.of("mensaje", "Usuario rechazado"));
         }).orElse(ResponseEntity.notFound().build());
@@ -299,7 +300,7 @@ public class AdminController {
                     "Equipo Subastas"
                 );
                 mailSender.send(msg);
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("No se pudo enviar código de preregistro a {}: {}", r.getEmail(), e.getMessage()); }
 
             return ResponseEntity.ok(Map.of("mensaje", "Código enviado al email del usuario"));
         }).orElse(ResponseEntity.notFound().build());
