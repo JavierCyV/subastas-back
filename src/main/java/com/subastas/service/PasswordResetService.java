@@ -17,7 +17,7 @@ public class PasswordResetService {
 
     private final JavaMailSender mailSender;
 
-    @Value("${spring.mail.username}")
+    @Value("${app.mail.from}")
     private String from;
 
     private record Entry(String code, Instant expiry) {}
