@@ -26,8 +26,7 @@ import com.subastas.entity.Factura;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
+import com.subastas.service.ResendMailService;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.core.Authentication;
 import org.springframework.transaction.annotation.Transactional;
@@ -68,7 +67,7 @@ public class SubastaController {
     private final CompraEmpresaRepository compraEmpresaRepo;
     private final FacturaRepository facturaRepo;
     private final ItemCatalogoSubitemRepository subitemRepo;
-    private final JavaMailSender mailSender;
+    private final ResendMailService mailService;
 
     // Mapa para almacenar los temporizadores de las subastas activas (itemId -> deadline)
     private final Map<Integer, java.time.LocalDateTime> activeItemDeadlines = new java.util.concurrent.ConcurrentHashMap<>();
@@ -722,10 +721,7 @@ public class SubastaController {
             String fechaSubasta = subasta != null && subasta.getFecha() != null ? subasta.getFecha().toString() : "";
             String categoria = subasta != null && subasta.getCategoria() != null ? subasta.getCategoria() : "";
 
-            SimpleMailMessage msg = new SimpleMailMessage();
-            msg.setTo(u.getEmail());
-            msg.setSubject("¡Ganaste la subasta! — Subastas");
-            msg.setText(
+            String emailBody =
                 "¡Felicitaciones! Ganaste el artículo en la subasta.\n\n" +
                 "--- DETALLE DE LA COMPRA ---\n" +
                 "Artículo: " + titulo + "\n" +
@@ -738,20 +734,18 @@ public class SubastaController {
                 "2. En caso de no hacerlo, se aplicará una multa del 10% del importe ganado.\n" +
                 "3. Una vez acreditado el pago, coordinaremos la entrega del artículo.\n" +
                 "4. Podés optar por envío a domicilio o retiro personal.\n\n" +
-                "Ante cualquier consulta, respondé este correo.\n\n" +
-                "Equipo Subastas"
-            );
+                "Equipo Subastas";
 
             if (TransactionSynchronizationManager.isActualTransactionActive()) {
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
-                        try { mailSender.send(msg); }
+                        try { mailService.send(u.getEmail(), "¡Ganaste la subasta! — Subastas", emailBody); }
                         catch (Exception e) { log.warn("No se pudo enviar email al ganador {}: {}", u.getEmail(), e.getMessage()); }
                     }
                 });
             } else {
-                try { mailSender.send(msg); }
+                try { mailService.send(u.getEmail(), "¡Ganaste la subasta! — Subastas", emailBody); }
                 catch (Exception e) { log.warn("No se pudo enviar email al ganador {}: {}", u.getEmail(), e.getMessage()); }
             }
         });

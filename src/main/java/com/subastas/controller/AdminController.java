@@ -8,8 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
+import com.subastas.service.ResendMailService;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -40,7 +39,7 @@ public class AdminController {
     private final RegistroPendienteRepository registroPendienteRepo;
     private final ProductoOrigenRepository productoOrigenRepo;
     private final DevolucionRepository devolucionRepo;
-    private final JavaMailSender mailSender;
+    private final ResendMailService mailService;
     private static final SecureRandom RNG = new SecureRandom();
 
     // ── USUARIOS PENDIENTES ────────────────────────────────────────────────────
@@ -80,17 +79,12 @@ public class AdminController {
 
             String nombre = u.getPersona() != null ? u.getPersona().getNombre() : "usuario";
             try {
-                SimpleMailMessage msg = new SimpleMailMessage();
-                msg.setTo(u.getEmail());
-                msg.setSubject("¡Tu cuenta fue aprobada! — Subastas");
-                msg.setText(
+                mailService.send(u.getEmail(), "¡Tu cuenta fue aprobada! — Subastas",
                     "Hola " + nombre + ",\n\n" +
                     "Tu solicitud de registro fue aprobada. Ya podés ingresar a la app con tu email y contraseña.\n\n" +
                     "Recordá que para poder pujar en subastas necesitás registrar al menos un medio de pago.\n\n" +
                     "¡Bienvenido/a!\n" +
-                    "Equipo Subastas"
-                );
-                mailSender.send(msg);
+                    "Equipo Subastas");
             } catch (Exception e) { log.warn("No se pudo enviar email de aprobación a {}: {}", u.getEmail(), e.getMessage()); }
 
             return ResponseEntity.ok(Map.of("mensaje", "Usuario aprobado"));
@@ -114,17 +108,12 @@ public class AdminController {
                     : "Tu solicitud de registro fue rechazada.";
 
             try {
-                SimpleMailMessage msg = new SimpleMailMessage();
-                msg.setTo(u.getEmail());
-                msg.setSubject("Solicitud de registro rechazada — Subastas");
-                msg.setText(
+                mailService.send(u.getEmail(), "Solicitud de registro rechazada — Subastas",
                     "Hola,\n\n" +
                     "Tu solicitud de registro fue revisada por un administrador y no fue aprobada.\n\n" +
                     "Motivo: " + motivo + "\n\n" +
                     "Si tenés alguna consulta, contactate con nosotros.\n\n" +
-                    "Equipo Subastas"
-                );
-                mailSender.send(msg);
+                    "Equipo Subastas");
             } catch (Exception e) { log.warn("No se pudo enviar email de rechazo a {}: {}", u.getEmail(), e.getMessage()); }
 
             return ResponseEntity.ok(Map.of("mensaje", "Usuario rechazado"));
@@ -288,18 +277,13 @@ public class AdminController {
             registroPendienteRepo.save(r);
 
             try {
-                SimpleMailMessage msg = new SimpleMailMessage();
-                msg.setTo(r.getEmail());
-                msg.setSubject("Completá tu registro — Subastas");
-                msg.setText(
+                mailService.send(r.getEmail(), "Completá tu registro — Subastas",
                     "Hola " + r.getNombre() + ",\n\n" +
                     "Tu preregistro fue aprobado. Usá el siguiente código para completar tu registro:\n\n" +
                     "Código: " + codigo + "\n\n" +
                     "El código expira en 48 horas.\n\n" +
                     "Ingresá a la app y usá la opción 'Completar registro' con tu email y este código.\n\n" +
-                    "Equipo Subastas"
-                );
-                mailSender.send(msg);
+                    "Equipo Subastas");
             } catch (Exception e) { log.warn("No se pudo enviar código de preregistro a {}: {}", r.getEmail(), e.getMessage()); }
 
             return ResponseEntity.ok(Map.of("mensaje", "Código enviado al email del usuario"));

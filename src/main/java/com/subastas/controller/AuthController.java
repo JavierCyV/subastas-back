@@ -21,8 +21,7 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
+import com.subastas.service.ResendMailService;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
@@ -43,7 +42,7 @@ public class AuthController {
     private final PasswordResetService resetService;
     private final RegistroPendienteRepository registroPendienteRepo;
     private final PersonaDniRepository personaDniRepo;
-    private final JavaMailSender mailSender;
+    private final ResendMailService mailService;
 
     // ── LOGIN ──────────────────────────────────────────────────────────────────
     record LoginRequest(@NotBlank @Email String email, @NotBlank String password) {}
@@ -142,18 +141,16 @@ public class AuthController {
 
         // Enviar mail inmediatamente
         try {
-            SimpleMailMessage msg = new SimpleMailMessage();
-            msg.setTo(rp.getEmail());
-            msg.setSubject("Completá tu registro — Subastas");
-            msg.setText(
+            mailService.send(
+                rp.getEmail(),
+                "Completá tu registro — Subastas",
                 "Hola " + rp.getNombre() + ",\n\n" +
                 "Tu solicitud fue recibida. Usá el siguiente código para verificar tu cuenta y completar tu registro:\n\n" +
                 "Código: " + codigo + "\n\n" +
                 "El código expira en 48 horas.\n\n" +
                 "Equipo Subastas"
             );
-            mailSender.send(msg);
-        } catch (Exception ignored) {}
+        } catch (Exception e) { log.warn("No se pudo enviar email de preregistro a {}: {}", rp.getEmail(), e.getMessage()); }
 
         return ResponseEntity.status(201).body(Map.of(
             "mensaje", "Preregistro exitoso. Código de validación generado y enviado.",
