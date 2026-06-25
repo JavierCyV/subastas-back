@@ -19,6 +19,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
@@ -320,6 +322,7 @@ public class AuthController {
         try {
             resetService.sendCode(req.email());
         } catch (Exception e) {
+            log.error("Error enviando código de recuperación a {}: {}", req.email(), e.getMessage(), e);
             return ResponseEntity.status(500).body(Map.of("error", "No se pudo enviar el email. Verificá la configuración de correo."));
         }
         return ResponseEntity.ok(Map.of(

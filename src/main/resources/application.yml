@@ -38,9 +38,9 @@ spring:
           ssl:
             trust: smtp.gmail.com
           from: ${MAIL_USERNAME}
-          connectiontimeout: 5000
-          timeout: 5000
-          writetimeout: 5000
+          connectiontimeout: 15000
+          timeout: 15000
+          writetimeout: 15000
 
 app:
   jwt:
