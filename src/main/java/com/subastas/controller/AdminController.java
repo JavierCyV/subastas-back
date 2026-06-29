@@ -215,6 +215,10 @@ public class AdminController {
             s.setEstado("tasado");
             s.setPrecioBaseOficial(req.precioBaseOficial());
             s.setComision(req.comision());
+            // El clientesolicitante es el duenio del item; se asigna aquí para que finalizarItem pueda registrar el resultado
+            if (s.getDuenio() == null) {
+                s.setDuenio(s.getCliente());
+            }
             solicitudRepo.save(s);
             return ResponseEntity.ok(solicitudToMap(s));
         }).orElse(ResponseEntity.notFound().build());

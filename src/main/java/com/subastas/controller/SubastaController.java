@@ -251,7 +251,10 @@ public class SubastaController {
                 .map(p -> {
                     // Obtener el número de postor del asistente
                     var asistente = asistenteRepo.findById(p.getAsistente()).orElse(null);
-                    int numPostor = asistente != null ? asistente.getNumeropostor() : 0;
+                    int numPostor = 0;
+                    if (asistente != null && asistente.getNumeropostor() != null) {
+                        numPostor = asistente.getNumeropostor();
+                    }
                     boolean esYo  = p.getAsistente().equals(miAsistenteId);
                     String fechaPujo = pujoTimestampRepo.findById(p.getIdentificador())
                             .map(pt -> pt.getFechaPujo().toString())
@@ -461,7 +464,7 @@ public class SubastaController {
                     .limit(10)
                     .map(p -> {
                         var asistente = asistenteRepo.findById(p.getAsistente()).orElse(null);
-                        int numPostor = asistente != null ? asistente.getNumeropostor() : 0;
+                        int numPostor = (asistente != null && asistente.getNumeropostor() != null) ? asistente.getNumeropostor() : 0;
                         String fechaPujo = pujoTimestampRepo.findById(p.getIdentificador())
                                 .map(pt -> pt.getFechaPujo().toString())
                                 .orElse(null);
@@ -681,18 +684,22 @@ public class SubastaController {
                 .map(sm -> sm.getMoneda()).orElse("ARS");
         String titulo = producto.getTitulo() != null ? producto.getTitulo() : "artículo";
 
-        if (producto.getDuenio() != null) {
+        // Usar duenio del producto; si es null (item sin tasación completa), usar el clientesolicitante como fallback
+        Integer duenioId = producto.getDuenio() != null ? producto.getDuenio() : producto.getCliente();
+
+        if (duenioId != null) {
             BigDecimal comisionPorcentaje = item.getComision() != null ? item.getComision() : BigDecimal.ZERO;
             BigDecimal comisionPagada = pujoGanador.getImporte()
                     .multiply(comisionPorcentaje)
                     .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-            if (comisionPagada.compareTo(new BigDecimal("0.01")) < 0) {
-                comisionPagada = new BigDecimal("0.01");
+            // DB tiene CHECK (comision > 0.01), así que el mínimo aplicable es 0.02
+            if (comisionPagada.compareTo(new BigDecimal("0.02")) < 0) {
+                comisionPagada = new BigDecimal("0.02");
             }
 
             com.subastas.entity.RegistroDeSubasta reg = new com.subastas.entity.RegistroDeSubasta();
             reg.setSubasta(subastaId);
-            reg.setDuenio(producto.getDuenio());
+            reg.setDuenio(duenioId);
             reg.setProducto(item.getProducto());
             reg.setCliente(asistente.getCliente());
             reg.setImporte(pujoGanador.getImporte());
@@ -760,7 +767,7 @@ public class SubastaController {
 
     // ── SUB-ITEMS (Item 26) ──────────────────────────────────────────────────
 
-    record SubitemRequest(String descripcion, Integer cantidad) {}
+    public record SubitemRequest(String descripcion, Integer cantidad) {}
 
     @PostMapping("/items/{itemId}/subitems")
     @Transactional
@@ -776,7 +783,7 @@ public class SubastaController {
         var si = new com.subastas.entity.ItemCatalogoSubitem();
         si.setItemCatalogo(itemId);
         si.setDescripcion(req.descripcion());
-        si.setCantidad(req.cantidad() != null ? req.cantidad() : 1);
+        si.setCantidad(req.cantidad() != null ? req.cantidad().intValue() : 1);
         subitemRepo.save(si);
 
         return ResponseEntity.status(201).body(Map.of(
