@@ -21,6 +21,7 @@ import com.subastas.repository.UsuarioRepository;
 import com.subastas.repository.VictoriaPagoRepository;
 import com.subastas.entity.VictoriaPago;
 import com.subastas.repository.FacturaRepository;
+import com.subastas.repository.DuenioRepository;
 import com.subastas.repository.ItemCatalogoSubitemRepository;
 import com.subastas.entity.Factura;
 import lombok.RequiredArgsConstructor;
@@ -67,6 +68,7 @@ public class SubastaController {
     private final CompraEmpresaRepository compraEmpresaRepo;
     private final FacturaRepository facturaRepo;
     private final ItemCatalogoSubitemRepository subitemRepo;
+    private final DuenioRepository duenioRepo;
     private final ResendMailService mailService;
 
     // Mapa para almacenar los temporizadores de las subastas activas (itemId -> deadline)
@@ -547,6 +549,14 @@ public class SubastaController {
                 .map(u -> u.getIdentificador()).orElse(null);
         if (userId == null) return ResponseEntity.status(404).body(Map.of("error", "Usuario no encontrado"));
 
+        // Verificar que el postor no sea el dueño o quien envió el artículo
+        var itemProducto = solicitudRepo.findById(item.getProducto()).orElse(null);
+        if (itemProducto != null) {
+            if (userId.equals(itemProducto.getDuenio()) || userId.equals(itemProducto.getCliente())) {
+                return ResponseEntity.status(403).body(Map.of("error", "No podés pujar en tu propio artículo"));
+            }
+        }
+
         // Verificar que el usuario es asistente en esta subasta
         var asistente = asistenteRepo.findByCliente(userId).stream()
                 .filter(a -> a.getSubasta().equals(id)).findFirst().orElse(null);
@@ -684,47 +694,58 @@ public class SubastaController {
                 .map(sm -> sm.getMoneda()).orElse("ARS");
         String titulo = producto.getTitulo() != null ? producto.getTitulo() : "artículo";
 
-        // Usar duenio del producto; si es null (item sin tasación completa), usar el clientesolicitante como fallback
-        Integer duenioId = producto.getDuenio() != null ? producto.getDuenio() : producto.getCliente();
-
-        if (duenioId != null) {
-            BigDecimal comisionPorcentaje = item.getComision() != null ? item.getComision() : BigDecimal.ZERO;
-            BigDecimal comisionPagada = pujoGanador.getImporte()
-                    .multiply(comisionPorcentaje)
-                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-            // DB tiene CHECK (comision > 0.01), así que el mínimo aplicable es 0.02
-            if (comisionPagada.compareTo(new BigDecimal("0.02")) < 0) {
-                comisionPagada = new BigDecimal("0.02");
-            }
-
-            com.subastas.entity.RegistroDeSubasta reg = new com.subastas.entity.RegistroDeSubasta();
-            reg.setSubasta(subastaId);
-            reg.setDuenio(duenioId);
-            reg.setProducto(item.getProducto());
-            reg.setCliente(asistente.getCliente());
-            reg.setImporte(pujoGanador.getImporte());
-            reg.setComision(comisionPagada);
-            com.subastas.entity.RegistroDeSubasta savedReg = registroRepo.save(reg);
-
-            com.subastas.entity.VictoriaPago vp = new com.subastas.entity.VictoriaPago();
-            vp.setRegistro(savedReg.getIdentificador());
-            vp.setCliente(asistente.getCliente());
-            vp.setImporte(pujoGanador.getImporte());
-            vp.setFechavictoria(java.time.LocalDateTime.now());
-            vp.setPagado("no");
-            victoriaRepo.save(vp);
-
-            // Item 17: Generar factura automáticamente
-            Factura factura = new Factura();
-            factura.setRegistro(savedReg.getIdentificador());
-            factura.setCliente(asistente.getCliente());
-            factura.setImportePujado(pujoGanador.getImporte());
-            factura.setComision(comisionPagada);
-            factura.setCostoEnvio(BigDecimal.ZERO);
-            factura.setTotal(pujoGanador.getImporte().add(comisionPagada));
-            factura.setConSeguro("si");
-            facturaRepo.save(factura);
+        // duenio debe ser un ID válido en la tabla duenios (FK constraint).
+        // Si el producto no tiene duenio asignado, verificar si el clientesolicitante también está en duenios.
+        Integer duenioId = producto.getDuenio();
+        if (duenioId == null && producto.getCliente() != null && duenioRepo.existsById(producto.getCliente())) {
+            duenioId = producto.getCliente();
         }
+
+        com.subastas.entity.RegistroDeSubasta savedReg = null;
+        if (duenioId != null) {
+            try {
+                BigDecimal comisionPorcentaje = item.getComision() != null ? item.getComision() : BigDecimal.ZERO;
+                BigDecimal comisionPagada = pujoGanador.getImporte()
+                        .multiply(comisionPorcentaje)
+                        .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+                // DB tiene CHECK (comision > 0.01), así que el mínimo aplicable es 0.02
+                if (comisionPagada.compareTo(new BigDecimal("0.02")) < 0) {
+                    comisionPagada = new BigDecimal("0.02");
+                }
+
+                com.subastas.entity.RegistroDeSubasta reg = new com.subastas.entity.RegistroDeSubasta();
+                reg.setSubasta(subastaId);
+                reg.setDuenio(duenioId);
+                reg.setProducto(item.getProducto());
+                reg.setCliente(asistente.getCliente());
+                reg.setImporte(pujoGanador.getImporte());
+                reg.setComision(comisionPagada);
+                savedReg = registroRepo.save(reg);
+
+                // Item 17: Generar factura automáticamente
+                Factura factura = new Factura();
+                factura.setRegistro(savedReg.getIdentificador());
+                factura.setCliente(asistente.getCliente());
+                factura.setImportePujado(pujoGanador.getImporte());
+                factura.setComision(comisionPagada);
+                factura.setCostoEnvio(BigDecimal.ZERO);
+                factura.setTotal(pujoGanador.getImporte().add(comisionPagada));
+                factura.setConSeguro("si");
+                facturaRepo.save(factura);
+            } catch (Exception e) {
+                log.error("Error creando RegistroDeSubasta para item {}: {}", item.getIdentificador(), e.getMessage());
+            }
+        }
+
+        // Siempre crear VictoriaPago para que el ganador vea y pueda pagar su victoria.
+        // victoriaspago.registro es nullable — si el registro falló, la victoria queda sin registro vinculado.
+        com.subastas.entity.VictoriaPago vp = new com.subastas.entity.VictoriaPago();
+        vp.setRegistro(savedReg != null ? savedReg.getIdentificador() : null);
+        vp.setCliente(asistente.getCliente());
+        vp.setImporte(pujoGanador.getImporte());
+        vp.setFechavictoria(java.time.LocalDateTime.now());
+        vp.setPagado("no");
+        victoriaRepo.save(vp);
 
         producto.setDisponible("no");
         solicitudRepo.save(producto);
