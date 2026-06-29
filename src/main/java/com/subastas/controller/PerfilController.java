@@ -250,6 +250,58 @@ public class PerfilController {
         return ResponseEntity.ok(Map.of("mensaje", "Victoria pagada correctamente"));
     }
 
+    @PostMapping("/multas/{id}/pagar")
+    public ResponseEntity<?> pagarMulta(@PathVariable Integer id,
+                                         @RequestBody PagarRequest req,
+                                         Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).build();
+
+        Integer userId = usuarioRepo.findByEmail(auth.getName())
+                .map(u -> u.getIdentificador())
+                .orElse(null);
+        if (userId == null) return ResponseEntity.status(404).build();
+
+        var multa = multaRepo.findById(id).orElse(null);
+        if (multa == null) return ResponseEntity.status(404).body(Map.of("error", "Multa no encontrada"));
+
+        if (!multa.getCliente().equals(userId))
+            return ResponseEntity.status(403).body(Map.of("error", "Esta multa no te pertenece"));
+
+        if ("si".equals(multa.getPagada()))
+            return ResponseEntity.badRequest().body(Map.of("error", "Esta multa ya fue pagada"));
+
+        if (req.metodoPagoId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "metodoPagoId es requerido"));
+
+        var metodo = metodoPagoRepo.findById(req.metodoPagoId()).orElse(null);
+        if (metodo == null)
+            return ResponseEntity.status(404).body(Map.of("error", "Método de pago no encontrado"));
+
+        if (!metodo.getCliente().equals(userId) || !"si".equals(metodo.getActivo()))
+            return ResponseEntity.status(403).body(Map.of("error", "El método de pago no te pertenece o no está activo"));
+
+        multa.setPagada("si");
+        multaRepo.save(multa);
+
+        // Si la multa está asociada a una subasta, acreditar el importe al duenio del item
+        if (multa.getRegistro() != null) {
+            registroRepo.findById(multa.getRegistro()).ifPresent(reg -> {
+                if (reg.getDuenio() != null && multa.getImporte() != null) {
+                    var cuenta = duenioCuentaRepo.findByDuenio(reg.getDuenio()).orElseGet(() -> {
+                        var nueva = new DuenioCuenta();
+                        nueva.setDuenio(reg.getDuenio());
+                        return nueva;
+                    });
+                    var saldoActual = cuenta.getSaldo() != null ? cuenta.getSaldo() : java.math.BigDecimal.ZERO;
+                    cuenta.setSaldo(saldoActual.add(multa.getImporte()));
+                    duenioCuentaRepo.save(cuenta);
+                }
+            });
+        }
+
+        return ResponseEntity.ok(Map.of("mensaje", "Multa pagada correctamente"));
+    }
+
     // ── SEGUROS (Item 14) ──────────────────────────────────────────────────────
 
     @GetMapping("/seguros")

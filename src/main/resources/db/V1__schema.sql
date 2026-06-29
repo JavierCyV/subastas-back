@@ -318,6 +318,7 @@ CREATE TABLE IF NOT EXISTS duenios_cuenta (
     numero_cuenta VARCHAR(100),
     moneda VARCHAR(3) DEFAULT 'ARS',
     es_exterior VARCHAR(2) DEFAULT 'no' CONSTRAINT chkdc CHECK (es_exterior IN ('si','no')),
+    saldo NUMERIC(15,2) DEFAULT 0.00,
     CONSTRAINT pk_duenios_cuenta PRIMARY KEY (duenio)
 );
 
