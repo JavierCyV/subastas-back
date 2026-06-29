@@ -3,8 +3,6 @@ package com.subastas.entity;
 import jakarta.persistence.*;
 import lombok.*;
 
-import java.math.BigDecimal;
-
 @Entity
 @Table(name = "duenios_cuenta")
 @Getter @Setter @NoArgsConstructor
@@ -28,7 +26,4 @@ public class DuenioCuenta {
 
     @Column(name = "es_exterior", length = 2)
     private String esExterior = "no";
-
-    @Column(precision = 15, scale = 2)
-    private BigDecimal saldo = BigDecimal.ZERO;
 }

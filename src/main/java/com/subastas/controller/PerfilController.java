@@ -211,7 +211,7 @@ public class PerfilController {
         return ResponseEntity.ok(victorias);
     }
 
-    record PagarRequest(Integer metodoPagoId) {}
+    public record PagarRequest(Integer metodoPagoId) {}
 
     @PostMapping("/victorias/{id}/pagar")
     public ResponseEntity<?> pagarVictoria(@PathVariable Integer id,
@@ -283,18 +283,13 @@ public class PerfilController {
         multa.setPagada("si");
         multaRepo.save(multa);
 
-        // Si la multa está asociada a una subasta, acreditar el importe al duenio del item
+        // Marcar la VictoriaPago asociada como pagada (registra que el dueño del item cobró)
         if (multa.getRegistro() != null) {
-            registroRepo.findById(multa.getRegistro()).ifPresent(reg -> {
-                if (reg.getDuenio() != null && multa.getImporte() != null) {
-                    var cuenta = duenioCuentaRepo.findByDuenio(reg.getDuenio()).orElseGet(() -> {
-                        var nueva = new DuenioCuenta();
-                        nueva.setDuenio(reg.getDuenio());
-                        return nueva;
-                    });
-                    var saldoActual = cuenta.getSaldo() != null ? cuenta.getSaldo() : java.math.BigDecimal.ZERO;
-                    cuenta.setSaldo(saldoActual.add(multa.getImporte()));
-                    duenioCuentaRepo.save(cuenta);
+            victoriaRepo.findByRegistroAndCliente(multa.getRegistro(), userId).ifPresent(v -> {
+                if (!"si".equals(v.getPagado())) {
+                    v.setPagado("si");
+                    v.setMetodopago(req.metodoPagoId());
+                    victoriaRepo.save(v);
                 }
             });
         }
@@ -374,7 +369,7 @@ public class PerfilController {
         ));
     }
 
-    record CuentaRequest(String banco, String tipoCuenta, String numeroCuenta, String moneda, String esExterior) {}
+    public record CuentaRequest(String banco, String tipoCuenta, String numeroCuenta, String moneda, String esExterior) {}
 
     @PutMapping("/cuenta")
     public ResponseEntity<?> actualizarCuenta(@RequestBody CuentaRequest req, Authentication auth) {
@@ -432,7 +427,7 @@ public class PerfilController {
     }
 
     // Item 18: Actualizar tipo de entrega y dirección de envío en factura
-    record EntregaRequest(String tipoEntrega, String direccionEnvio, String conSeguro) {}
+    public record EntregaRequest(String tipoEntrega, String direccionEnvio, String conSeguro) {}
 
     @PutMapping("/facturas/{id}/entrega")
     public ResponseEntity<?> actualizarEntrega(@PathVariable Integer id,
@@ -489,7 +484,7 @@ public class PerfilController {
         return ResponseEntity.ok(result);
     }
 
-    record DevolucionRequest(Integer productoId, String motivo) {}
+    public record DevolucionRequest(Integer productoId, String motivo) {}
 
     @PostMapping("/devoluciones")
     public ResponseEntity<?> solicitarDevolucion(@RequestBody DevolucionRequest req, Authentication auth) {

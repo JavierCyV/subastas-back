@@ -10,4 +10,5 @@ public interface VictoriaPagoRepository extends JpaRepository<VictoriaPago, Inte
     List<VictoriaPago> findByClienteAndPagado(Integer clienteId, String pagado);
     List<VictoriaPago> findByPagadoAndFechavictoriaBefore(String pagado, LocalDateTime fecha);
     boolean existsByRegistro(Integer registroId);
+    java.util.Optional<VictoriaPago> findByRegistroAndCliente(Integer registroId, Integer clienteId);
 }

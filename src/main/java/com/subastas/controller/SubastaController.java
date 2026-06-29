@@ -482,22 +482,29 @@ public class SubastaController {
                 if (tiempoRestante < 0) tiempoRestante = 0L;
             }
 
-            // Buscar producto original para obtener las imágenes reales
+            // Buscar producto original para obtener título, descripción e imágenes reales
             com.subastas.entity.SolicitudItem producto = solicitudRepo.findById(finalItemActual.getProducto()).orElse(null);
+            String nombreItem = (producto != null && producto.getTitulo() != null && !producto.getTitulo().isBlank())
+                    ? producto.getTitulo()
+                    : descCatalogo;
+            String descripcionItem = (producto != null && producto.getDescripcion() != null && !producto.getDescripcion().isBlank())
+                    ? producto.getDescripcion()
+                    : "";
             String imagenesStr = producto != null ? producto.getArchivoComprobante() : null;
-            java.util.List<String> imagenes = (imagenesStr != null && !imagenesStr.trim().isEmpty()) 
-                    ? java.util.Arrays.asList(imagenesStr.split(",")) 
+            java.util.List<String> imagenes = (imagenesStr != null && !imagenesStr.trim().isEmpty())
+                    ? java.util.Arrays.asList(imagenesStr.split(","))
                     : java.util.Collections.emptyList();
 
             itemActualMap = new HashMap<>();
-            itemActualMap.put("itemId",      finalItemActual.getIdentificador());
-            itemActualMap.put("numero",      numero);
-            itemActualMap.put("descripcion", descCatalogo);
-            itemActualMap.put("precioBase",  finalItemActual.getPreciobase());
-            itemActualMap.put("mejorOferta", mejorImporte);
-            itemActualMap.put("pujos",       pujos);
-            itemActualMap.put("tiempoRestante", tiempoRestante);
-            itemActualMap.put("imagenes",    imagenes);
+            itemActualMap.put("itemId",           finalItemActual.getIdentificador());
+            itemActualMap.put("numero",            numero);
+            itemActualMap.put("descripcion",       nombreItem);
+            itemActualMap.put("detalleDescripcion", descripcionItem);
+            itemActualMap.put("precioBase",        finalItemActual.getPreciobase());
+            itemActualMap.put("mejorOferta",       mejorImporte);
+            itemActualMap.put("pujos",             pujos);
+            itemActualMap.put("tiempoRestante",    tiempoRestante);
+            itemActualMap.put("imagenes",          imagenes);
         }
 
         Map<String, Object> result = new HashMap<>();
